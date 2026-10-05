@@ -36,6 +36,7 @@ export default function Navegacion() {
               <Link
                 key={enlace.href}
                 href={enlace.href}
+                aria-label={enlace.etiqueta}
                 className={
                   enlace.destacar
                     ? "inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 text-sm font-semibold rounded-xl brand-gradient text-white shadow-md shadow-brand-600/20 hover:shadow-lg hover:shadow-brand-600/30 hover:brightness-110 transition-all"

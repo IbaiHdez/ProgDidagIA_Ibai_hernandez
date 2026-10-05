@@ -38,8 +38,7 @@ function sanearBloque(bloque) {
 
   if (tipo === 'tabla') {
     const columnas = (Array.isArray(bloque?.columnas) ? bloque.columnas : [])
-      .map((c) => comoTexto(c).trim())
-      .filter(Boolean);
+      .map((c, i) => comoTexto(c).trim() || `Columna ${i + 1}`);
 
     const filas = (Array.isArray(bloque?.filas) ? bloque.filas : [])
       .filter(Array.isArray)
@@ -51,6 +50,8 @@ function sanearBloque(bloque) {
       });
 
     // Sin cabeceras pero con datos: generamos cabeceras genéricas.
+    const ancho = Math.max(columnas.length, ...filas.map((f) => f.length), 1);
+    while (columnas.length < ancho) columnas.push(`Columna ${columnas.length + 1}`);
     const columnasFinales = columnas.length > 0
       ? columnas
       : (filas[0]?.length || 1) > 0
@@ -59,6 +60,7 @@ function sanearBloque(bloque) {
 
     return {
       tipo: 'tabla',
+      ...(comoTexto(bloque.titulo).trim() ? { titulo: comoTexto(bloque.titulo).trim() } : {}),
       columnas: columnasFinales,
       filas: filas.map((fila) => {
         const celdas = [...fila];
@@ -81,7 +83,7 @@ function sanearBloque(bloque) {
   return { tipo: 'texto', texto: comoTexto(bloque?.texto).trim() };
 }
 
-function sanearSeccion(seccion, indice, total) {
+function sanearSeccion(seccion, indice) {
   const codigo = comoTexto(seccion?.codigo).trim();
   const titulo = comoTexto(seccion?.titulo).trim();
 
@@ -93,9 +95,10 @@ function sanearSeccion(seccion, indice, total) {
 
   const bloques = (Array.isArray(seccion?.bloques) ? seccion.bloques : [])
     .map(sanearBloque)
-    .filter((b) => b.texto || b.items?.length || b.filas?.length);
+    .filter((b) => b.texto || b.titulo || b.items?.length || b.filas?.length || b.columnas?.some((c) => !/^Columna \d+$/.test(c)));
 
   return {
+    ...(seccion.sourceId ? { sourceId: comoTexto(seccion.sourceId) } : {}),
     codigo,
     titulo: titulo || `Sección ${indice + 1}`,
     nivel,

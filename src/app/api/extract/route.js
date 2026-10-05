@@ -1,73 +1,29 @@
 import { NextResponse } from 'next/server';
-import { extraerTexto, detectarModulos, recortarModulo } from '@/lib/documento';
-
-// Extracción de PDF/Word de documentos grandes.
+import { extraerTexto, detectarApartados } from '@/lib/documento';
+import { extraerPdfConTablas } from '@/lib/pdfLayout';
+export const runtime = 'nodejs';
 export const maxDuration = 120;
-
-const FORMATOS_ACEPTADOS = {
-  'application/pdf': 'pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-};
+const MAX_BYTES = 30 * 1024 * 1024;
 
 export async function POST(request) {
   try {
     const formData = await request.formData();
     const file = formData.get('file');
-    const moduleCode = (formData.get('moduleCode') || '').toString().trim();
-
-    if (!file || typeof file.arrayBuffer !== 'function') {
-      return NextResponse.json({ error: 'No se ha subido ningún archivo.' }, { status: 400 });
-    }
-
-    const nombre = file.name || '';
+    if (!file || typeof file.arrayBuffer !== 'function') return NextResponse.json({ error: 'Selecciona un archivo.' }, { status: 400 });
+    if (file.size > MAX_BYTES) return NextResponse.json({ error: 'El archivo supera el límite de 30 MB.' }, { status: 413 });
+    if (!/\.(pdf|docx)$/i.test(file.name)) return NextResponse.json({ error: 'Solo se admiten PDF y Word (.docx).' }, { status: 415 });
     const buffer = Buffer.from(await file.arrayBuffer());
-
-    // pdf-parse se traga cualquier cosa, así que validamos el tipo antes.
-    const esPdf = file.type === 'application/pdf' || /\.pdf$/i.test(nombre);
-    const esDocx = FORMATOS_ACEPTADOS[file.type] === 'docx' || /\.docx$/i.test(nombre);
-
-    if (!esPdf && !esDocx) {
-      return NextResponse.json(
-        { error: 'Formato no admitido. Sube un archivo PDF o Word (.docx).' },
-        { status: 415 }
-      );
+    const pdf = /\.pdf$/i.test(file.name);
+    if (pdf ? !buffer.subarray(0, 1024).includes(Buffer.from('%PDF-')) : buffer.subarray(0, 2).toString() !== 'PK') {
+      return NextResponse.json({ error: 'El contenido no corresponde al formato del archivo.' }, { status: 415 });
     }
-
-    const { texto, formato } = await extraerTexto(buffer, nombre);
-    const modulos = detectarModulos(texto);
-
-    let resultado = { texto, modulo: null, recortado: false };
-
-    if (moduleCode) {
-      const { texto: recortado, encontrado, titulo } = recortarModulo(texto, moduleCode);
-      resultado = {
-        texto: recortado,
-        modulo: { codigo: moduleCode, titulo, encontrado },
-        recortado: encontrado,
-      };
-    }
-
-    return NextResponse.json({
-      text: resultado.texto,
-      formato,
-      caracteres: resultado.texto.length,
-      modulos,
-      modulo: resultado.modulo,
-      recortado: resultado.recortado,
-    });
+    const { texto, formato, tablas = {}, avisos = [] } = pdf ? await extraerPdfConTablas(buffer) : await extraerTexto(buffer, file.name);
+    if(!texto.trim()) throw new Error('Documento sin texto extraíble.');
+    const apartados = detectarApartados(texto);
+    return NextResponse.json({ text: texto, formato, tablas, avisos, caracteres: texto.length, apartados, modulos: apartados });
   } catch (error) {
-    console.error('Error parsing document:', error);
-    return NextResponse.json(
-      { error: error.message || 'Hubo un error interno al procesar el documento.' },
-      { status: 500 }
-    );
+    console.error('Error de extracción:', error);
+    return NextResponse.json({ error: 'No se pudo leer el documento. Comprueba que contiene texto y que no está protegido ni dañado.' }, { status: 422 });
   }
 }
-
-/** GET devuelve los formatos soportados, útil para el frontend. */
-export async function GET() {
-  return NextResponse.json({
-    formatos: ['pdf', 'docx'],
-    aceptaModuleCode: true,
-  });
-}
+export async function GET() { return NextResponse.json({ formatos: ['pdf', 'docx'], maxBytes: MAX_BYTES }); }

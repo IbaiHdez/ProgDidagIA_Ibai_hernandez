@@ -1,137 +1,79 @@
 import { randomUUID } from 'node:crypto';
 import { NextResponse, after } from 'next/server';
 import { analizarDocumentoFragmentado, estadoProveedores } from '@/lib/ai';
-import { recortarModulo } from '@/lib/documento';
+import { normalizarTexto, recortarApartado } from '@/lib/estructura';
+import { validarTablasImportadas } from '@/lib/validacion';
+import { separarTablas } from '@/lib/tablasOriginales';
 
-// Analizar un módulo completo puede tardar varios minutos: sin límite artificial.
+export const runtime = 'nodejs';
 export const maxDuration = 300;
-
-/**
- * Cola de análisis en memoria.
- *
- * El análisis de un documento largo puede tardar minutos. Si la ruta esperase
- * a terminar, el navegador se queda mirando una petición abierta sin saber qué
- * pasa. En su lugar la ruta responde al instante con un `jobId` y el trabajo
- * sigue en segundo plano (`after`), mientras el frontend va consultando el
- * progreso fragmento a fragmento.
- *
- * Vive en `globalThis` para no perderla con el Fast Refresh de Next.js.
- */
 const trabajos = (globalThis.__progdidactaiJobs ||= new Map());
-
-function actualizar(jobId, cambios) {
-  const job = trabajos.get(jobId);
-  if (job) trabajos.set(jobId, { ...job, ...cambios });
+const TTL = 30 * 60 * 1000;
+const responder = (data, status = 200) => NextResponse.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
+function limpiar() {
+  for (const [id, job] of trabajos) if (Date.now() - job.creadoEn > TTL) {
+    job.controlador?.abort(); trabajos.delete(id);
+  }
 }
 
-/** Crea el trabajo y lanza el análisis en segundo plano. */
 export async function POST(request) {
   let body;
-
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Petición inválida: se esperaba JSON.' }, { status: 400 });
+  try { body = await request.json(); } catch { return responder({ error: 'Se esperaba una petición JSON.' }, 400); }
+  if (typeof body?.text !== 'string' || !body.text.trim()) return responder({ error: 'Falta el texto del documento.' }, 400);
+  if (body.text.length > 2_000_000) return responder({ error: 'El documento supera los dos millones de caracteres. Divide el archivo.' }, 413);
+  const scope = body.scope || (body.moduleCode ? 'apartado' : 'documento');
+  if (!['documento', 'apartado'].includes(scope)) return responder({ error: 'Alcance de análisis inválido.' }, 400);
+  let text = normalizarTexto(body.text), moduleCode = null;
+  if (scope === 'apartado') {
+    const seleccion = recortarApartado(text, body.sectionId || body.moduleCode);
+    if (!seleccion.encontrado) return responder({ error: 'El apartado seleccionado ya no existe. Revisa la selección.' }, 422);
+    text = seleccion.texto; moduleCode = seleccion.apartado.codigo || seleccion.apartado.titulo;
   }
-
-  const moduleCode = (body?.moduleCode || '').toString().trim() || null;
-  let text = (body?.text || '').toString();
-
-  if (!text.trim()) {
-    return NextResponse.json({ error: 'Falta el texto extraído del documento' }, { status: 400 });
+  let tablas;
+  try { tablas=validarTablasImportadas(body.tablas); separarTablas(text,tablas); }
+  catch(error) {return responder({error:error.message},422);}
+  limpiar();
+  if ([...trabajos.values()].filter((j) => ['pendiente', 'analizando'].includes(j.estado)).length >= 2) {
+    return responder({ error: 'Ya hay dos análisis en curso. Espera a que termine uno o cancélalo.' }, 429);
   }
-
-  // Si el frontend no recortó el módulo, lo hacemos aquí: enviar el PDF entero
-  // de un ciclo formativo mezcla apartados de módulos distintos.
-  if (moduleCode) {
-    const { texto, encontrado } = recortarModulo(text, moduleCode);
-    if (encontrado) {
-      console.log(`[IA] Recorte automático del módulo ${moduleCode}: ${text.length} -> ${texto.length} caracteres`);
-      text = texto;
-    } else {
-      console.warn(`[IA] No se encontró el encabezado del módulo ${moduleCode}; se analiza el documento completo.`);
-    }
-  }
-
-  const jobId = randomUUID();
-
-  trabajos.set(jobId, {
-    estado: 'pendiente',
-    progreso: null,
-    resultado: null,
-    error: null,
-    meta: null,
-    creadoEn: Date.now(),
-  });
-
+  const jobId = randomUUID(), controlador = new AbortController();
+  const job = { estado: 'pendiente', progreso: null, resultado: null, error: null, meta: null, creadoEn: Date.now(), controlador };
+  trabajos.set(jobId, job);
   after(async () => {
+    const timeout = setTimeout(() => controlador.abort(new Error('El análisis superó el límite de tiempo. Prueba con un apartado más pequeño.')), 270_000);
     try {
-      actualizar(jobId, { estado: 'analizando' });
-
+      controlador.signal.throwIfAborted(); job.estado = 'analizando';
       const { data, meta } = await analizarDocumentoFragmentado(text, {
-        moduleCode,
-        onProgress: (progreso) => actualizar(jobId, { progreso }),
+        moduleCode, nombreDocumento: typeof body.nombreDocumento === 'string' ? body.nombreDocumento.slice(0, 250) : '',
+        signal: controlador.signal,
+        tablas, usarIA: body.usarIA !== false,
+        onProgress: (progreso) => { job.progreso = progreso; },
       });
-
-      console.log(
-        `[IA] Trabajo ${jobId} completado con ${meta.proveedor}/${meta.modelo}` +
-        (meta.fragmentos > 1 ? ` en ${meta.fragmentos} fragmentos` : '')
-      );
-
-      actualizar(jobId, { estado: 'listo', resultado: data, meta });
-
-      // Los trabajos terminados se limpian solos para no filtrar memoria.
-      setTimeout(() => trabajos.delete(jobId), 10 * 60 * 1000);
+      controlador.signal.throwIfAborted();
+      Object.assign(job, { estado: 'listo', resultado: data, meta });
     } catch (error) {
-      console.error(`[IA] Trabajo ${jobId} falló:`, error);
-
-      actualizar(jobId, {
-        estado: 'error',
-        error: {
-          message: error.message,
-          isUnavailable: Boolean(error.isUnavailable),
-          intentos: error.attempts || null,
-        },
-      });
-
-      setTimeout(() => trabajos.delete(jobId), 10 * 60 * 1000);
-    }
+      if (job.estado !== 'cancelado') Object.assign(job, { estado: 'error', error: { message: error.message || 'No se pudo completar el análisis.' } });
+    } finally { clearTimeout(timeout); }
   });
-
-  return NextResponse.json({ jobId, estado: 'pendiente' }, { status: 202 });
+  return responder({ jobId, estado: 'pendiente' }, 202);
 }
 
-/**
- * GET /api/analyze            -> estado de los proveedores de IA.
- * GET /api/analyze?jobId=xxx  -> progreso y resultado de un análisis.
- */
 export async function GET(request) {
-  const { searchParams } = new URL(request.url);
-  const jobId = searchParams.get('jobId');
-
+  limpiar();
+  const jobId = new URL(request.url).searchParams.get('jobId');
   if (!jobId) {
     const providers = estadoProveedores();
-    return NextResponse.json({
-      providers,
-      operativo: providers.some((p) => p.activo && p.circuito === 'operativo'),
-    });
+    return responder({ providers, operativo: providers.some((p) => p.activo && p.circuito === 'operativo') });
   }
-
   const job = trabajos.get(jobId);
+  if (!job) return responder({ error: 'El análisis ha caducado o el servidor se ha reiniciado. Vuelve a iniciarlo.' }, 404);
+  const { estado, progreso, resultado, error, meta } = job;
+  return responder({ jobId, estado, progreso, resultado, error, meta });
+}
 
-  if (!job) {
-    return NextResponse.json(
-      { estado: 'desconocido', error: 'El análisis ya no está en memoria. Vuelve a lanzarlo.' },
-      { status: 404 }
-    );
-  }
-
-  return NextResponse.json({
-    jobId,
-    estado: job.estado,
-    progreso: job.progreso,
-    resultado: job.resultado,
-    error: job.error,
-    meta: job.meta,
-  });
+export async function DELETE(request) {
+  const job = trabajos.get(new URL(request.url).searchParams.get('jobId'));
+  if (!job) return responder({ error: 'Análisis no encontrado.' }, 404);
+  if (['pendiente', 'analizando'].includes(job.estado)) { job.estado = 'cancelado'; job.controlador.abort(); }
+  return responder({ estado: job.estado });
 }

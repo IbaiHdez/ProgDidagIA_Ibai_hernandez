@@ -70,8 +70,6 @@ const PATRONES_NO_REINTENTABLES = [
   'unsupported model',
   'invalid model',
   'unknown model',
-  'billing',
-  'quota exceeded',
 ];
 
 const ESTADOS_TRANSIENTOS = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
@@ -113,6 +111,12 @@ export function toProviderError(error, { provider, model }) {
   if (isMissingKeyError(error)) {
     return new ProviderError(`API key de ${provider} ausente o inválida: ${message}`, {
       provider, model, status: status ?? 401, code, retryable: false, cause: error,
+    });
+  }
+
+  if (lower.includes('quota exceeded') || lower.includes('exceeded your current quota') || lower.includes('insufficient_quota')) {
+    return new ProviderError(`Cuota de ${provider} agotada: ${message}`, {
+      provider, model, status: status ?? 429, code: 'QUOTA_EXCEEDED', retryable: false, cause: error,
     });
   }
 

@@ -2,14 +2,15 @@ import { getActiveProviders } from './config';
 import { ProviderError, AiUnavailableError, toProviderError } from './errors';
 import { conCircuito, estadoCircuito } from './circuitBreaker';
 import { extraerJson, sanearRespuesta } from './sanitize';
-import { fragmentarTexto, fusionarResultados } from './fragmentar';
+import { crearPlanFragmentos, coberturaContenido, formatearParte } from './fragmentar';
 import { analizarConGroq } from './providers/groq';
 import { analizarConGemini } from './providers/gemini';
+import { expandirTablas, bloquesTexto } from '../tablasOriginales.js';
 
 /**
  * Orquestador de IA con cascada de proveedores.
  *
- * Estrategia (Groq -> Gemini por defecto, configurable con AI_PROVIDER_ORDER):
+ * Estrategia (Gemini -> Groq por defecto, configurable con AI_PROVIDER_ORDER):
  *   Proveedor A -> modelo A.1, A.2 ... -> Proveedor B -> modelo B.1, B.2 ...
  *
  * - Los errores reintentables (429, 503, saturación, red) se reintentan con
@@ -18,8 +19,8 @@ import { analizarConGemini } from './providers/gemini';
  *   truncada) saltan directamente al siguiente candidato.
  * - El circuit breaker evita encadenar reintentos cuando un proveedor está caído.
  *
- * Solo cuando TODOS los candidatos fallan se devuelve AiUnavailableError, que la
- * ruta API traduce a un 503 que el frontend sabe reintentar.
+ * Si todos los candidatos fallan se lanza AiUnavailableError; el plan conserva
+ * el texto de esa parte y avisa al usuario.
  */
 
 const PROVEEDORES_IMPL = {
@@ -95,6 +96,7 @@ export async function analizarDocumento(text, { moduleCode = null, signal } = {}
   let usados = new Set();
 
   for (const candidato of candidatos) {
+    signal?.throwIfAborted();
     const { id, config, model } = candidato;
     const circuito = estadoCircuito(id);
 
@@ -147,6 +149,7 @@ export async function analizarDocumento(text, { moduleCode = null, signal } = {}
           },
         };
       } catch (error) {
+        signal?.throwIfAborted();
         const providerError = toProviderError(error, { provider: id, model });
 
         // El siguiente modelo que se probará tras este fallo (para el diagnóstico).
@@ -209,73 +212,115 @@ export async function analizarDocumento(text, { moduleCode = null, signal } = {}
   throw new AiUnavailableError(mensaje, { attempts: diagnostico });
 }
 
-/**
- * Analiza un documento largo troceándolo por apartados y fusionando los resultados.
- *
- * Un módulo de programación real ocupa 50-150 páginas: enviado de una vez, el
- * modelo se trunca y el análisis falla. Aquí cada fragmento se analiza por
- * separado (cada uno con su propia cascada de proveedores) y se unen.
- *
- * Si un fragmento falla, no se tira el trabajo: se continúa con los demás y se
- * informa en `avisos`. Solo si fallan todos se propaga el error.
- *
- * @param {string} text
- * @param {{ moduleCode?: string, signal?: AbortSignal, onProgress?: (p) => void }} options
- */
-export async function analizarDocumentoFragmentado(text, { moduleCode, signal, onProgress } = {}) {
-  const fragmentos = fragmentarTexto(text);
-  const total = fragmentos.length;
-
-  if (total <= 1) {
-    onProgress?.({ fragmento: 1, total: 1, fase: 'analizando' });
-    const { data, meta } = await analizarDocumento(text, { moduleCode, signal });
-    onProgress?.({ fragmento: 1, total: 1, fase: 'terminado' });
-    return { data, meta: { ...meta, fragmentos: 1 } };
-  }
-
-  console.log(`[IA] Documento troceado en ${total} fragmentos`);
-
-  const resultados = [];
-  const avisos = [];
-  let metaGanador = null;
-
-  for (let i = 0; i < total; i++) {
-    onProgress?.({ fragmento: i + 1, total, fase: 'analizando' });
-
-    try {
-      const { data, meta } = await analizarDocumento(fragmentos[i], { moduleCode, signal });
-      resultados.push(data);
-      metaGanador = metaGanador ? { ...metaGanador, usoMultiple: true } : meta;
-    } catch (error) {
-      // Un fragmento problemático no debe invalidar el módulo entero: si los
-      // proveedores están saturados puede que el siguiente fragmento sí cuaje
-      // (y si no, el aviso se traslada al usuario al final).
-      avisos.push(`Fragmento ${i + 1}/${total}: ${error.message}`);
-      console.warn(`[IA] Fragmento ${i + 1}/${total} falló:`, error.message);
-
-      if (resultados.length === 0 && i === total - 1) throw error;
-    }
-  }
-
-  onProgress?.({ fragmento: total, total, fase: 'fusionando' });
-  const data = fusionarResultados(resultados);
-
-  if (data.secciones.length === 0) {
-    throw new AiUnavailableError(
-      `No se pudo analizar ningún fragmento del documento (${avisos.length} de ${total} fallaron).`,
-      { attempts: avisos }
-    );
-  }
-
-  onProgress?.({ fragmento: total, total, fase: 'terminado' });
-
-  return {
-    data,
-    meta: {
-      ...(metaGanador || { proveedor: 'desconocido', modelo: 'desconocido' }),
-      fragmentos: total,
-      fragmentosOk: resultados.length,
-      avisos,
-    },
+/** Procesa partes con identidad estable; nunca descarta texto por fallos de IA. */
+export async function analizarDocumentoFragmentado(text, { moduleCode, signal, onProgress, nombreDocumento, presupuestoMs = 240_000, tablas = {}, usarIA = true } = {}) {
+  if (!text?.trim()) throw new Error('El texto a analizar está vacío.');
+  const { secciones, fragmentos } = crearPlanFragmentos(text,undefined,tablas);
+  const total = fragmentos.length, avisos = [], diagnosticos = [], proveedores = new Set();
+  const salida = new Map(secciones.map((s, i) => [s.id, {
+    sourceId: s.id, codigo: s.codigo, titulo: s.titulo, nivel: s.nivel, orden: i + 1, textoOriginal: expandirTablas(s.texto,tablas).trim(), bloques: [],
+  }]));
+  let metaPrimera = null, fragmentosOk = 0, partesConservadas = 0, reintentosIntegridad = 0, partesRecuperadas = 0;
+  const finPresupuesto = Date.now() + Math.max(0, Math.min(presupuestoMs, 240_000));
+  let presupuestoAgotado = false;
+  const signalAcotada = (ms) => signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
+  const evaluar = (data, parte) => {
+    const normal = (s) => String(s || '').normalize('NFKC').trim().replace(/\s+/g, ' ').replace(/\.$/, '').toLowerCase();
+    const exactas = data?.secciones.filter((s) => s.sourceId === parte.sourceId) || [];
+    const candidatas = exactas.length ? exactas : data?.secciones.filter((s) =>
+      !s.sourceId && normal(s.codigo) === normal(parte.codigo) && normal(s.titulo) === normal(parte.titulo)) || [];
+    const bloques = candidatas.flatMap((s) => s.bloques || []);
+    const cobertura = coberturaContenido(parte.texto, bloques);
+    return { bloques, cobertura, valido: candidatas.length > 0 && cobertura.valido };
   };
+  for (let i = 0; i < total; i++) {
+    signal?.throwIfAborted();
+    const fragmento = fragmentos[i];
+    onProgress?.({ fragmento: i + 1, completados: i, total, fase: 'analizando' });
+    if(fragmento.sinIA || !usarIA || fragmento.partes.every((p)=>!p.texto?.trim())) {
+      for(const parte of fragmento.partes) salida.get(parte.sourceId).bloques.push(...(parte.bloqueOriginal?[structuredClone(parte.bloqueOriginal)]:bloquesTexto(parte.texto)));
+      onProgress?.({fragmento:i+1,completados:i+1,total,fase:'analizando'});
+      continue;
+    }
+    let data;
+    try {
+      const restante = finPresupuesto - Date.now();
+      if (restante <= 0) throw new Error('PRESUPUESTO_AGOTADO');
+      const respuesta = await analizarDocumento(fragmento.texto, { moduleCode, signal: signalAcotada(Math.min(restante, 60_000)) });
+      data = respuesta.data;
+      metaPrimera ||= { ...respuesta.meta, modulo: data.modulo };
+      proveedores.add(`${respuesta.meta.proveedor}/${respuesta.meta.modelo}`);
+      fragmentosOk++;
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (Date.now() >= finPresupuesto) {
+        if (!presupuestoAgotado) avisos.push('Se alcanzó el tiempo máximo de IA. Se conserva el trabajo completado y el texto original de las partes pendientes.');
+        presupuestoAgotado = true;
+      } else {
+        avisos.push(`Parte ${i + 1}/${total}: no se pudo estructurar con IA. Se ha conservado el texto original.`);
+        console.warn(`[IA] Fragmento ${i + 1}:`, error.message);
+      }
+    }
+    const evaluaciones = fragmento.partes.map((parte) => evaluar(data, parte));
+    const pendientes = fragmento.partes.filter((parte, j) => parte.texto.trim() && !evaluaciones[j].valido);
+    let reparacion;
+    if (data && pendientes.length && finPresupuesto > Date.now()) {
+      // Una única segunda pasada por fragmento, solo con el contenido rechazado.
+      // Un fallo de formato no provoca reintentar el documento ni bucles de IA.
+      reintentosIntegridad++;
+      onProgress?.({ fragmento: i + 1, completados: i, total, fase: 'revisando' });
+      const revisionSignal = signalAcotada(Math.max(1, Math.min(30_000, finPresupuesto - Date.now())));
+      try {
+        const diferencias = pendientes.map((p) => {
+          const c = evaluaciones[fragmento.partes.indexOf(p)].cobertura;
+          return `${p.codigo || p.titulo}: faltantes ${JSON.stringify(c.faltantes)}; adicionales ${JSON.stringify(c.anadidos)}.`;
+        }).join('\n');
+        const respuesta = await analizarDocumento(
+          'REVISIÓN DE TRANSCRIPCIÓN: en una respuesta anterior faltaban o sobraban los siguientes términos (cantidad = ocurrencias). Comprueba en la fuente sus frases completas y conserva TODAS sus apariciones, especialmente los rótulos de tablas.\n' + diferencias + '\nTranscribe literalmente TODO el contenido de estos apartados, conservando tablas, letras de criterios, viñetas, cifras y repeticiones. No resumas ni corrijas. Si una tabla está incompleta, conserva ese tramo como texto.\n\n' + pendientes.map(formatearParte).join('\n'),
+          { moduleCode, signal: revisionSignal });
+        reparacion = respuesta.data;
+        proveedores.add(`${respuesta.meta.proveedor}/${respuesta.meta.modelo}`);
+      } catch {
+        signal?.throwIfAborted();
+      }
+    }
+    for (const [j, parte] of fragmento.partes.entries()) {
+      const destino = salida.get(parte.sourceId);
+      let evaluacion = evaluaciones[j];
+      if (!evaluacion.valido && reparacion) {
+        const segunda = evaluar(reparacion, parte);
+        if (segunda.valido) { evaluacion = segunda; partesRecuperadas++; }
+        else if (segunda.cobertura.perdidos + segunda.cobertura.extras < evaluacion.cobertura.perdidos + evaluacion.cobertura.extras) evaluacion = segunda;
+      }
+      if (evaluacion.valido) {
+        destino.bloques.push(...evaluacion.bloques);
+      } else if (parte.texto.trim()) {
+        destino.bloques.push({ tipo: 'texto', texto: parte.texto.trim() });
+        destino.revisar = true;
+        partesConservadas++;
+        if (data) {
+          const { perdidos, extras } = evaluacion.cobertura;
+          const motivo = evaluacion.bloques.length
+            ? `faltaban ${perdidos} términos y había ${extras} términos adicionales`
+            : 'la IA no devolvió el apartado con su identificador';
+          avisos.push(`${parte.codigo || parte.titulo}, parte ${parte.parte}: ${motivo}. La revisión automática no lo resolvió; se conserva el original.`);
+          diagnosticos.push({ codigo: parte.codigo, parte: parte.parte, ...evaluacion.cobertura });
+        }
+      }
+    }
+    onProgress?.({ fragmento: i + 1, completados: i + 1, total, fase: 'analizando' });
+  }
+  signal?.throwIfAborted();
+  onProgress?.({ fragmento: total, completados: total, total, fase: 'fusionando' });
+  const modulo = moduleCode ? metaPrimera?.modulo || { codigo: moduleCode, nombre: secciones[0]?.titulo || '', curso: '', profesor: '' }
+    : { codigo: '', nombre: nombreDocumento?.replace(/\.(pdf|docx)$/i, '') || 'Documento completo', curso: '', profesor: '' };
+  const data = { modulo, secciones: [...salida.values()] };
+  onProgress?.({ fragmento: total, completados: total, total, fase: 'terminado' });
+  const { modulo: _modulo, ...meta } = metaPrimera || {};
+  void _modulo;
+  return { data, meta: {
+    ...meta, proveedor: meta.proveedor || 'extracción directa', modelo: meta.modelo || 'Estructura del documento',
+    tablasOriginales: fragmentos.filter((f)=>f.sinIA).length,
+    fragmentos: total, fragmentosOk, partesConservadas, presupuestoAgotado, reintentosIntegridad, partesRecuperadas, diagnosticos, proveedores: [...proveedores], avisos,
+  } };
 }

@@ -1,29 +1,16 @@
 import { NextResponse } from 'next/server';
 import { programacionDAO } from '@/dao/programacionDAO';
-
+import { validarProgramacion } from '@/lib/validacion';
 export async function GET() {
-  try {
-    const programaciones = await programacionDAO.findAll();
-    return NextResponse.json(programaciones);
-  } catch (error) {
-    console.error("Error GET /api/programaciones:", error);
-    return NextResponse.json({ error: "Error al obtener programaciones." }, { status: 500 });
-  }
+  try { return NextResponse.json(await programacionDAO.findAll()); }
+  catch (error) { console.error(error); return NextResponse.json({ error: 'No se pudo conectar con la base de datos.' }, { status: 503 }); }
 }
-
 export async function POST(request) {
   try {
-    const body = await request.json();
-    
-    // Validación súper básica
-    if (!body || !body.modulo || !body.secciones) {
-      return NextResponse.json({ error: "El JSON proporcionado no tiene el formato correcto." }, { status: 400 });
-    }
-
-    const nuevaProgramacion = await programacionDAO.create(body);
-    return NextResponse.json(nuevaProgramacion, { status: 201 });
+    const data = validarProgramacion(await request.json());
+    return NextResponse.json(await programacionDAO.create(data), { status: 201 });
   } catch (error) {
-    console.error("Error POST /api/programaciones:", error);
-    return NextResponse.json({ error: "Error al guardar la programación." }, { status: 500 });
+    const status = error.status || (error instanceof SyntaxError ? 400 : 503);
+    return NextResponse.json({ error: status === 400 ? error.message : 'No se pudo guardar. Comprueba la conexión a la base de datos.' }, { status });
   }
 }

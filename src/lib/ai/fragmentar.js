@@ -1,120 +1,107 @@
-/**
- * Fragmentación del documento.
- *
- * Los módulos de programación didáctica ocupan con facilidad 50-150 páginas, muy
- * por encima de lo que un modelo responde en una sola llamada: el JSON de salida
- * se trunca y el análisis falla. Aquí se trocea el texto en trozos manejables
- * **cortando por encabezados** (nunca a mitad de un apartado) y con solapamiento
- * para que un apartado partido entre dos trozos aparezca completo en alguno.
- *
- * Después el orquestador analiza cada fragmento por separado y fusiona los
- * resultados (ver `analizarDocumentoFragmentado` en `src/lib/ai/index.js`).
- */
+import { crearSeccionesFuente, detectarApartados } from '../estructura.js';
+import { separarTablas } from '../tablasOriginales.js';
+export { coberturaContenido } from './integridad.js';
 
-import { leerEncabezado } from '../documento.js';
+const limiteConfigurado = () => {
+  const n = Number(process.env.AI_CHUNK_CHARS || 14000);
+  return Number.isFinite(n) && n >= 512 ? Math.min(n, 40000) : 14000;
+};
 
-const CARACTERES_POR_FRAGMENTO = Number(process.env.AI_CHUNK_CHARS || 14000);
-const SOLAPAMIENTO = Number(process.env.AI_CHUNK_OVERLAP || 1200);
-
-/**
- * Divide el texto en fragmentos por límites de encabezado.
- * @returns {string[]}
- */
-export function fragmentarTexto(texto, maxChars = CARACTERES_POR_FRAGMENTO) {
-  if (!texto) return [];
-  if (texto.length <= maxChars) return [texto];
-
-  const lineas = texto.split('\n');
-
-  // Puntos de corte candidatos: inicio de cada encabezado numerado.
-  const cortes = [];
-  for (let i = 0; i < lineas.length; i++) {
-    const encabezado = leerEncabezado(lineas[i]);
-    if (!encabezado) continue;
-
-    const desde = cortes.length > 0 ? cortes.at(-1).indice : 0;
-    const longitud = lineas.slice(desde, i).join('\n').length;
-    if (longitud >= maxChars * 0.6) {
-      cortes.push({ indice: i, nivel: encabezado.nivel, codigo: encabezado.codigo });
-    }
-  }
-
-  if (cortes.length === 0) {
-    // Sin encabezados reconocibles: cortamos por párrafos completos.
-    return cortarPorParrafos(lineas, maxChars);
-  }
-
-  const fragmentos = [];
+/** Partición exacta y acotada: sin solapamientos, incluso con párrafos gigantes. */
+export function dividirTexto(texto, limite, respetarTablas = false) {
+  if (!Number.isFinite(limite) || limite < 1) throw new Error('Límite de fragmento inválido.');
+  const partes = [];
   let inicio = 0;
-
-  for (const corte of cortes) {
-    if (corte.indice <= inicio) continue;
-
-    const trozo = lineas.slice(inicio, corte.indice).join('\n');
-    if (trozo.trim().length === 0) continue;
-
-    fragmentos.push(trozo);
-    inicio = corte.indice;
-  }
-
-  const resto = lineas.slice(inicio).join('\n');
-  if (resto.trim()) fragmentos.push(resto);
-
-  // Si aun así algún fragmento se pasa del límite (encabezados muy largos),
-  // lo troceamos por párrafos.
-  return fragmentos.flatMap((fragmento) =>
-    fragmento.length > maxChars * 1.5 ? cortarPorParrafos(fragmento.split('\n'), maxChars) : [fragmento]
-  );
-}
-
-function cortarPorParrafos(lineas, maxChars) {
-  const fragmentos = [];
-  let actual = [];
-
-  for (const linea of lineas) {
-    const candidata = [...actual, linea].join('\n');
-
-    if (candidata.length > maxChars && actual.length > 0) {
-      fragmentos.push(actual.join('\n'));
-      // Solapamiento: arrastramos el final para no perder contexto entre trozos.
-      actual = actual.slice(-Math.ceil(SOLAPAMIENTO / 80));
+  while (inicio < texto.length) {
+    let fin = Math.min(inicio + limite, texto.length);
+    if (fin < texto.length) {
+      const salto = texto.lastIndexOf('\n', fin - 1);
+      const espacio = texto.lastIndexOf(' ', fin - 1);
+      const candidato = salto > inicio + limite * 0.5 ? salto + 1 : espacio + 1;
+      if (candidato > inicio + limite * 0.5) fin = candidato;
+      if (respetarTablas) {
+        // Rótulos de unidades numeradas: «Actividad 3:», «Tabla 2:»,
+        // «Situación de aprendizaje 1:»... Sin depender de un documento concreto.
+        const tramo = texto.slice(inicio, inicio + limite);
+        const fichas = [...tramo.matchAll(/^\p{L}[\p{L}\t ]{2,65}\s+\d+\s*:/gimu)];
+        const ficha = fichas.at(-1)?.index;
+        const parrafo = tramo.lastIndexOf('\n\n');
+        if (ficha > limite * 0.25) fin = inicio + ficha;
+        else if (parrafo > limite * 0.5) fin = inicio + parrafo + 2;
+      }
+      // No cortar una pareja UTF-16.
+      if (fin > inicio && /[\uD800-\uDBFF]/.test(texto[fin - 1])) fin--;
     }
-
-    actual.push(linea);
+    if (fin <= inicio) fin = Math.min(inicio + 2, texto.length);
+    partes.push(texto.slice(inicio, fin));
+    inicio = fin;
   }
-
-  if (actual.length > 0) fragmentos.push(actual.join('\n'));
-
-  return fragmentos.filter((f) => f.trim());
+  return partes;
 }
 
-/**
- * Fusiona los resultados de varios fragmentos en una única programación.
- * - `modulo`: el primer resultado no vacío.
- * - `secciones`: concatenadas, deduplicadas por código+título y renumeradas.
- */
+export const formatearParte = (p) =>
+  `[APARTADO sourceId="${p.sourceId}" parte="${p.parte}"]\n${p.codigo} ${p.titulo}\n${p.texto}\n[/APARTADO]`;
+
+export function crearPlanFragmentos(texto, maxChars = limiteConfigurado(), tablas = {}) {
+  if (!Number.isFinite(maxChars) || maxChars < 512) throw new Error('El tamaño mínimo es 512 caracteres.');
+  const secciones = crearSeccionesFuente(texto);
+  const fragmentos = [];
+  let partes = [], longitud = 0;
+  const cerrar = () => {
+    if (partes.length) fragmentos.push({ partes, texto: partes.map(formatearParte).join('\n') });
+    partes = []; longitud = 0;
+  };
+  for (const s of secciones) {
+    const presupuesto = Math.max(128, maxChars - s.titulo.length - s.codigo.length - 150);
+    const trozos = separarTablas(s.texto,tablas).flatMap((p)=>p.bloqueOriginal?[p]:dividirTexto(p.texto,presupuesto,true).map((texto)=>({texto})));
+    if (!trozos.length) trozos.push({texto:''});
+    trozos.forEach((trozo, i) => {
+      if(trozo.bloqueOriginal) {
+        cerrar();
+        fragmentos.push({sinIA:true,texto:'',partes:[{sourceId:s.id,bloqueOriginal:trozo.bloqueOriginal,tablaId:trozo.tablaId}]});
+        return;
+      }
+      const textoParte=trozo.texto;
+      const peso = textoParte.length + s.titulo.length + s.codigo.length + 150;
+      if (longitud + peso > maxChars || partes.some((p) => p.sourceId === s.id)) cerrar();
+      partes.push({ sourceId: s.id, codigo: s.codigo, titulo: s.titulo, nivel: s.nivel, parte: i + 1, texto: textoParte });
+      longitud += peso;
+    });
+  }
+  cerrar();
+  return { secciones, fragmentos };
+}
+
+/** API compatible: fragmentos de texto exactos, sin pérdida ni duplicación. */
+export function fragmentarTexto(texto, maxChars = limiteConfigurado()) {
+  if (!texto) return [];
+  const puntos = [...new Set([0, ...detectarApartados(texto).map((s) => s.inicio), texto.length])];
+  const fragmentos = [];
+  let actual = '';
+  for (let i = 0; i < puntos.length - 1; i++) {
+    for (const parte of dividirTexto(texto.slice(puntos[i], puntos[i + 1]), maxChars)) {
+      if (actual.length + parte.length > maxChars) { fragmentos.push(actual); actual = ''; }
+      actual += parte;
+    }
+  }
+  if (actual) fragmentos.push(actual);
+  return fragmentos;
+}
+
 export function fusionarResultados(resultados) {
   const modulo = resultados.find((r) => r?.modulo && Object.values(r.modulo).some(Boolean))?.modulo || {};
-  const vistas = new Set();
-  const secciones = [];
-
-  for (const resultado of resultados) {
-    for (const seccion of resultado?.secciones || []) {
-      // Un mismo apartado puede caer en dos fragmentos por el solapamiento.
-      const clave = `${seccion.codigo}|${seccion.titulo}`;
-      if (vistas.has(clave)) continue;
-      vistas.add(clave);
-      secciones.push({ ...seccion, orden: secciones.length + 1 });
+  const secciones = [], vistas = new Map();
+  for (const resultado of resultados) for (const s of resultado?.secciones || []) {
+    const key = s.sourceId || `${s.codigo}|${s.titulo}`;
+    const existente = vistas.get(key);
+    if (existente) {
+      for (const bloque of s.bloques || []) {
+        if (!existente.bloques.some((b) => JSON.stringify(b) === JSON.stringify(bloque))) existente.bloques.push(bloque);
+      }
+    } else {
+      const nueva = { ...s, bloques: [...(s.bloques || [])], orden: secciones.length + 1 };
+      secciones.push(nueva); vistas.set(key, nueva);
     }
   }
-
-  return {
-    modulo: {
-      codigo: modulo.codigo || '',
-      nombre: modulo.nombre || '',
-      curso: modulo.curso || '',
-      profesor: modulo.profesor || '',
-    },
-    secciones,
-  };
+  return { modulo: { codigo: '', nombre: '', curso: '', profesor: '', ...modulo }, secciones };
 }

@@ -39,6 +39,7 @@ export async function analizarConGemini({ config, text, moduleCode, model, signa
   const modelo = model || config.models[0];
   const ai = obtenerCliente(config);
 
+  signal?.throwIfAborted();
   const controlador = new AbortController();
   const temporizador = setTimeout(() => controlador.abort(), config.timeoutMs || 180000);
   const alCancelar = () => controlador.abort();

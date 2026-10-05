@@ -1,17 +1,5 @@
-import Link from "next/link";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Navegacion from "@/components/Navegacion";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata = {
   title: {
@@ -24,7 +12,7 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="es" className={`${geistSans.variable} ${geistMono.variable} h-full`}>
+    <html lang="es" className="h-full">
       <body className="min-h-full flex flex-col">
         <a
           href="#contenido"

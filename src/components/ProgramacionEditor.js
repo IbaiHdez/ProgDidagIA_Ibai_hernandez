@@ -1,4 +1,5 @@
 "use client";
+import { mapaCeldas } from '@/lib/tablasOriginales';
 
 import { useEffect, useMemo, useState } from "react";
 import { Boton, Tarjeta, Icono, Etiqueta, Notificacion, useNotificacion } from "@/components/ui";
@@ -17,7 +18,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
   // El id pasa de null a valor al guardar por primera vez, así que es estado
   // (y no un ref) para poder mostrar los botones de exportación al momento.
   const [idGuardada, setIdGuardada] = useState(idExistente);
-  const [guardado, setGuardado] = useState(Boolean(idExistente));
+  const [versionGuardada, setVersionGuardada] = useState(() => idExistente ? JSON.stringify(datosIniciales) : null);
   const [guardando, setGuardando] = useState(false);
   const [verJson, setVerJson] = useState(false);
   // Los dos primeros apartados nacen desplegados: así se ve de un vistazo que
@@ -37,7 +38,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
   const cambiarSeccion = (indice, campo, valor) =>
     setProgramacion((p) => {
       const nuevas = [...(p.secciones || [])];
-      nuevas[indice] = { ...nuevas[indice], [campo]: valor };
+      nuevas[indice] = { ...nuevas[indice], [campo]: valor, ...(campo === 'codigo' ? { nivel: valor.split('.').filter(Boolean).length || 1 } : {}) };
       return { ...p, secciones: nuevas };
     });
 
@@ -46,7 +47,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
       const nuevas = [...p.secciones];
       const seccion = { ...nuevas[indiceSeccion] };
       const bloques = [...(seccion.bloques || [])];
-      bloques[indiceBloque] = { ...bloques[indiceBloque], [campo]: valor };
+      bloques[indiceBloque] = campo === '__tabla' ? { ...bloques[indiceBloque], ...valor } : { ...bloques[indiceBloque], [campo]: valor };
       seccion.bloques = bloques;
       nuevas[indiceSeccion] = seccion;
       return { ...p, secciones: nuevas };
@@ -59,6 +60,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
       ...p,
       secciones: (p.secciones || []).filter((_, i) => i !== indice),
     }));
+    setDesplegados((prev) => new Set([...prev].filter((i) => i !== indice).map((i) => i > indice ? i - 1 : i)));
     avisar("Apartado eliminado", "info");
   };
 
@@ -71,7 +73,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
         {
           codigo: "",
           titulo: "Nuevo apartado",
-          nivel: (ultimo?.nivel || 1) + 1,
+          nivel: ultimo?.nivel || 1,
           orden: (p.secciones || []).length + 1,
           bloques: [{ tipo: "texto", texto: "" }],
         },
@@ -91,10 +93,11 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
 
   /* --------------------------------------------------------------- Guardado */
 
-  const hayCambios = !guardado;
+  const hayCambios = JSON.stringify(programacion) !== versionGuardada;
 
   const guardar = async () => {
     setGuardando(true);
+    const instantanea = JSON.stringify(programacion);
     try {
       const esNuevo = !idGuardada;
       const res = await fetch(
@@ -102,7 +105,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
         {
           method: esNuevo ? "POST" : "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(programacion),
+          body: instantanea,
         }
       );
 
@@ -110,7 +113,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
       if (!res.ok) throw new Error(json.error || "No se ha podido guardar.");
 
       if (esNuevo) setIdGuardada(json._id);
-      setGuardado(true);
+      setVersionGuardada(instantanea);
       avisar(esNuevo ? "Programación guardada correctamente" : "Cambios guardados");
     } catch (e) {
       avisar(e.message, "error", 5000);
@@ -233,7 +236,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
                 Plegar todo
               </Boton>
               <Boton tamano="sm" variante="secundario" icono="refrescar" onClick={renumerar}>
-                Renumerar
+                Actualizar orden
               </Boton>
               <Boton tamano="sm" icono="panel" onClick={anadirSeccion}>
                 Añadir apartado
@@ -241,6 +244,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
             </div>
           </div>
 
+          {secciones.some((s) => s.revisar) && <p className="text-sm text-amber-700 mb-3">Los apartados marcados conservan texto original. Comprueba su formato antes de entregarlos.</p>}
           {secciones.length === 0 ? (
             <Tarjeta className="p-10 text-center">
               <p className="text-slate-600 mb-4">
@@ -302,7 +306,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
               {idGuardada ? "Guardar cambios" : "Guardar programación"}
             </Boton>
 
-            {idGuardada && (
+            {idGuardada && !hayCambios && (
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <a
                   href={`/api/programaciones/${idGuardada}/pdf`}
@@ -324,9 +328,9 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
             )}
           </div>
 
-          {!idGuardada && (
+          {hayCambios && (
             <p className="text-xs text-slate-500 mt-3 leading-relaxed">
-              Guarda primero la programación para poder descargarla en PDF o Word.
+              Guarda los cambios para exportar la última versión en PDF o Word.
             </p>
           )}
 
@@ -406,6 +410,7 @@ function Apartado({ seccion, indice, abierto, onToggle, onCambiar, onCambiarBloq
           className="campo flex-1 min-w-0 font-medium"
         />
 
+        {seccion.revisar && <button className="text-xs text-amber-700 underline shrink-0" onClick={() => onCambiar(indice, "revisar", false)} title="Marcar como revisado">Por revisar</button>}
         <Etiqueta tono="neutro" className="hidden sm:inline-flex shrink-0" title="Nivel de jerarquía">
           N{seccion.nivel || 1}
         </Etiqueta>
@@ -423,12 +428,20 @@ function Apartado({ seccion, indice, abierto, onToggle, onCambiar, onCambiarBloq
       {/* Contenido */}
       {abierto && (
         <div className="border-t border-slate-200 p-4 sm:p-5 bg-slate-50/50 animate-fade-in">
+          {seccion.textoOriginal && <details className="mb-4 rounded-xl border border-slate-200 bg-white p-3 text-sm">
+            <summary className="cursor-pointer font-medium text-slate-600">Comparar con el texto original</summary>
+            <pre className="whitespace-pre-wrap font-sans text-xs max-h-64 overflow-auto mt-3 text-slate-600">{seccion.textoOriginal}</pre>
+            <button className="text-xs text-brand-700 underline mt-3" onClick={() => {
+              if (confirm('¿Sustituir los bloques de este apartado por su texto original?')) onCambiar(indice, 'bloques', [{ tipo: 'texto', texto: seccion.textoOriginal }]);
+            }}>Restaurar texto original</button>
+          </details>}
           <ul className="space-y-3">
             {(seccion.bloques || []).map((bloque, i) => (
               <li key={i}>
                 <EditorBloque
                   bloque={bloque}
                   onCambiar={(campo, valor) => onCambiarBloque(indice, i, campo, valor)}
+                  onEliminar={() => onCambiar(indice, "bloques", seccion.bloques.filter((_, n) => n !== i))}
                 />
               </li>
             ))}
@@ -470,7 +483,7 @@ const ETIQUETA_TIPO = {
   tabla: { texto: "Tabla", icono: "panel", tono: "verde" },
 };
 
-function EditorBloque({ bloque, onCambiar }) {
+function EditorBloque({ bloque, onCambiar, onEliminar }) {
   const meta = ETIQUETA_TIPO[bloque.tipo] || ETIQUETA_TIPO.texto;
 
   return (
@@ -480,6 +493,7 @@ function EditorBloque({ bloque, onCambiar }) {
           <Icono nombre={meta.icono} className="w-3 h-3" />
           {meta.texto}
         </Etiqueta>
+        <button onClick={() => { if (confirm('¿Eliminar este bloque?')) onEliminar(); }} aria-label="Eliminar bloque" className="p-1 text-slate-400 hover:text-red-600"><Icono nombre="basura" className="w-4 h-4" /></button>
       </div>
 
       <div className="p-3.5">
@@ -538,6 +552,7 @@ function EditorBloque({ bloque, onCambiar }) {
 }
 
 function EditorTabla({ bloque, onCambiar }) {
+  if(bloque.diseno?.origen==='pdf') return <EditorTablaOriginal bloque={bloque} onCambiar={onCambiar} />;
   const columnas = bloque.columnas || [];
 
   const actualizarColumna = (i, valor) => {
@@ -554,6 +569,9 @@ function EditorTabla({ bloque, onCambiar }) {
 
   return (
     <div className="overflow-x-auto -mx-3.5 px-3.5">
+      <label className="block text-xs font-semibold text-slate-600 mb-3">Título de la tabla (si existe en el original)
+        <input className="campo mt-1 w-full" value={bloque.titulo || ''} onChange={(e) => onCambiar('titulo', e.target.value)} placeholder="Sin título" />
+      </label>
       <table className="w-full border-collapse text-sm min-w-[420px]">
         <thead>
           <tr>
@@ -565,6 +583,8 @@ function EditorTabla({ bloque, onCambiar }) {
                   aria-label={`Cabecera de la columna ${c + 1}`}
                   className="w-full px-2.5 py-2 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700 focus:bg-white focus:border-brand-400 transition-colors"
                 />
+                <button type="button" disabled={columnas.length <= 1} aria-label={`Eliminar columna ${c + 1}`} className="text-xs text-slate-400 hover:text-red-600 disabled:opacity-30 mt-1"
+                  onClick={() => { if (confirm(`¿Eliminar la columna ${c + 1} y sus celdas?`)) onCambiar("__tabla", { columnas: columnas.filter((_, n) => n !== c), filas: (bloque.filas || []).map((f) => f.filter((_, n) => n !== c)) }); }}>Eliminar columna</button>
               </th>
             ))}
             <th className="w-8" />
@@ -606,7 +626,7 @@ function EditorTabla({ bloque, onCambiar }) {
           + Añadir fila
         </button>
         <button
-          onClick={() => onCambiar("columnas", [...columnas, `Columna ${columnas.length + 1}`])}
+          onClick={() => onCambiar("__tabla", { columnas: [...columnas, `Columna ${columnas.length + 1}`], filas: (bloque.filas || []).map((f) => [...f, ""]) })}
           className="text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors"
         >
           + Añadir columna
@@ -614,6 +634,26 @@ function EditorTabla({ bloque, onCambiar }) {
       </div>
     </div>
   );
+}
+
+function EditorTablaOriginal({bloque,onCambiar}) {
+  const {celdas,cubiertas,estilos}=mapaCeldas(bloque);
+  return <div className="overflow-x-auto">
+    <p className="text-xs text-brand-700 mb-3">Tabla original · página {bloque.diseno.pagina} · Puedes editar el contenido de cada celda.</p>
+    <table className="w-full border-collapse table-fixed text-sm min-w-[650px]" aria-label={`Tabla original de la página ${bloque.diseno.pagina}`}>
+      <colgroup>{bloque.diseno.anchosColumnas.map((a,i)=><col key={i} style={{width:`${a}%`}} />)}</colgroup>
+      <tbody>{bloque.filas.map((fila,f)=><tr key={f}>{fila.map((valor,c)=>{
+        const k=`${f}:${c}`;if(cubiertas.has(k))return null;
+        const span=celdas.get(k)||{},e=estilos.get(k)||{};
+        return <td key={c} colSpan={span.columnas||1} rowSpan={span.filas||1} className="border border-slate-400 align-top p-1" style={{backgroundColor:e.fondo?`#${e.fondo}`:undefined,color:e.color?`#${e.color}`:undefined,fontWeight:e.negrita?700:400}}>
+          <textarea value={valor} aria-label={`Celda original fila ${f+1}, columna ${c+1}`} rows={Math.min(18,Math.max(2,valor.split('\n').length))}
+            className="w-full min-w-0 bg-transparent resize-y p-1 outline-none focus:ring-2 focus:ring-blue-500"
+            onChange={(event)=>{const nuevas=bloque.filas.map((r)=>[...r]);nuevas[f][c]=event.target.value;onCambiar('filas',nuevas);}} />
+        </td>;
+      })}</tr>)}</tbody>
+    </table>
+    <button className="text-xs text-slate-500 underline mt-3" onClick={()=>{if(confirm('¿Convertir a tabla simple? Se conserva el texto, pero se eliminan las combinaciones de celdas y los estilos originales.'))onCambiar('__tabla',{diseno:undefined});}}>Editar filas y columnas como tabla simple</button>
+  </div>;
 }
 
 /* ------------------------------------------------------------------ Campos */

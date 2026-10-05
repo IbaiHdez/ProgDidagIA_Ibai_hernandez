@@ -18,7 +18,7 @@ const BASE_ENFRIAMIENTO_MS = 30_000;
 const MAX_ENFRIAMIENTO_MS = 5 * 60_000;
 
 function obtenerEstado(id) {
-  if (!store.has(id)) store.set(id, { fallos: 0, abiertoHasta: 0, ultimoFallo: 0 });
+  if (!store.has(id)) store.set(id, { fallos: 0, abiertoHasta: 0, ultimoFallo: 0, aperturas: 0 });
   return store.get(id);
 }
 
@@ -41,7 +41,7 @@ export function registrarFallo(id) {
 
   if (estado.fallos >= MAX_FALLIDOS) {
     // Enfriamiento exponencial: 30s, 60s, 120s... hasta 5 minutos.
-    const escalon = Math.min(estado.fallos - MAX_FALLIDOS, 4);
+    const escalon = Math.min(estado.aperturas++, 4);
     const enfriamiento = Math.min(BASE_ENFRIAMIENTO_MS * 2 ** escalon, MAX_ENFRIAMIENTO_MS);
     estado.abiertoHasta = Date.now() + enfriamiento;
     estado.fallos = 0;
@@ -54,6 +54,7 @@ export function registrarFallo(id) {
 /** Un éxito reinicia el contador de fallos. */
 export function registrarExito(id) {
   obtenerEstado(id).fallos = 0;
+  obtenerEstado(id).aperturas = 0;
   obtenerEstado(id).abiertoHasta = 0;
 }
 

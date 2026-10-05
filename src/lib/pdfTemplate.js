@@ -1,154 +1,41 @@
+import { calcularDisenoTabla } from './tableLayout.js';
+import { mapaCeldas } from './tablasOriginales.js';
+export const escaparHTML = (valor) => String(valor ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const texto = (s) => escaparHTML(s).replace(/\n/g, '<br/>');
+const titulo = (s) => `${s.codigo ? `${String(s.codigo).replace(/\.$/, '')}. ` : ''}${s.titulo || ''}`;
 export function generateHTMLTemplate(data) {
-  const { secciones } = data;
-
-  // Renderiza los bloques de cada sección
-  const renderBloques = (bloques) => {
-    if (!bloques || !Array.isArray(bloques)) return '';
-    return bloques.map(b => {
-      if (b.tipo === 'texto') {
-        return `<div class="bloque-texto">${b.texto.replace(/\n/g, '<br/>')}</div>`;
+  const { modulo = {}, secciones = [] } = data;
+  const nivelBase = Math.min(...secciones.map((s) => Number(s.nivel) || 1), 8);
+  const bloques = (lista = []) => lista.map((b) => {
+    if (b.tipo === 'texto') return `<div class="parrafo">${texto(b.texto)}</div>`;
+    if (b.tipo === 'lista') return `<ul>${(b.items || []).map((i) => `<li>${texto(i)}</li>`).join('')}</ul>`;
+    if (b.tipo === 'tabla') {
+      const d = calcularDisenoTabla(b);
+      if(b.diseno?.origen==='pdf') {
+        const {celdas,cubiertas,estilos}=mapaCeldas(b);
+        const filas=(b.filas||[]).map((fila,f)=>`<tr${d.dividirFilas[f]?' class="fila-larga"':''}>${fila.map((valor,c)=>{
+          const k=`${f}:${c}`;if(cubiertas.has(k))return '';
+          const span=celdas.get(k)||{}, e=estilos.get(k)||{};
+          return `<td colspan="${span.columnas||1}" rowspan="${span.filas||1}" style="${e.fondo?`background:#${e.fondo};`:''}${e.color?`color:#${e.color};`:''}${e.negrita?'font-weight:bold;':''}">${texto(valor)}</td>`;
+        }).join('')}</tr>`);
+        const cab=b.diseno.filasCabecera||0;
+        return `<table class="tabla-original" style="font-size:${d.fuente}pt">${b.titulo?`<caption>${texto(b.titulo)}</caption>`:''}<colgroup>${d.anchos.map((a)=>`<col style="width:${a}%"/>`).join('')}</colgroup>${cab?`<thead>${filas.slice(0,cab).join('')}</thead>`:''}<tbody>${filas.slice(cab).join('')}</tbody></table>`;
       }
-      if (b.tipo === 'lista') {
-        const itemsHtml = (b.items || []).map(item => `<li>${item}</li>`).join('');
-        return `<ul class="bloque-lista">${itemsHtml}</ul>`;
-      }
-      if (b.tipo === 'tabla') {
-        const headerHtml = (b.columnas || []).map(col => `<th>${col}</th>`).join('');
-        const rowsHtml = (b.filas || []).map(fila => {
-          const cells = fila.map(cell => `<td>${cell.replace(/\n/g, '<br/>')}</td>`).join('');
-          return `<tr>${cells}</tr>`;
-        }).join('');
-        
-        return `
-          <table class="bloque-tabla">
-            <thead><tr>${headerHtml}</tr></thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-        `;
-      }
-      return '';
-    }).join('');
-  };
-
-  // Renderiza recursivamente/secuencialmente las secciones
-  const renderSecciones = (seccs) => {
-    if (!seccs || !Array.isArray(seccs)) return '';
-    return seccs.map(s => {
-      // Ajustamos heading tag
-      const headingTag = `h${Math.min(s.nivel + 1, 6)}`;
-      
-      // Construcción del título EXACTAMENTE como pide el usuario
-      let title = '';
-      if (s.codigo) {
-        let cod = String(s.codigo).trim();
-        // Solo añadimos punto si el usuario no lo ha puesto y si realmente es un código jerárquico
-        if (!cod.endsWith('.')) cod += '.';
-        title = `${cod} ${s.titulo || ''}`.trim();
-      } else {
-        title = (s.titulo || '').trim();
-      }
-      
-      return `
-        <div class="seccion">
-          <${headingTag} class="seccion-titulo nivel-${s.nivel}">${title}</${headingTag}>
-          <div class="seccion-contenido">
-            ${renderBloques(s.bloques)}
-          </div>
-        </div>
-      `;
-    }).join('');
-  };
-
-  return `
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-      <meta charset="UTF-8">
-      <title>Programación</title>
-      <style>
-        body {
-          font-family: Arial, sans-serif;
-          color: #000;
-          line-height: 1.35;
-          margin: 0;
-          padding: 0;
-          font-size: 11pt; /* Aumentada legibilidad */
-        }
-        
-        /* Secciones y contenido */
-        .seccion {
-          margin-bottom: 20px;
-        }
-        .seccion-titulo {
-          color: #1a365d; /* Azul oscuro institucional */
-          margin-top: 24px;
-          margin-bottom: 12px;
-          font-family: Arial, sans-serif;
-          font-weight: bold;
-        }
-        .nivel-1 { font-size: 14pt; margin-top: 32px; border-bottom: 2px solid #1a365d; padding-bottom: 4px; }
-        .nivel-2 { font-size: 13pt; margin-top: 26px; border-bottom: 1px solid #cbd5e0; padding-bottom: 4px; }
-        .nivel-3 { font-size: 12pt; margin-top: 20px; }
-        .nivel-4 { font-size: 11pt; margin-top: 16px; }
-        
-        .bloque-texto {
-          margin-bottom: 14px;
-          text-align: justify;
-          text-indent: 0;
-        }
-        
-        .bloque-lista {
-          margin-bottom: 14px;
-          margin-top: 8px;
-          padding-left: 24px;
-        }
-        .bloque-lista li {
-          margin-bottom: 6px;
-          text-align: justify;
-        }
-
-        /* Tablas */
-        .bloque-tabla {
-          width: 100%;
-          border-collapse: collapse;
-          margin-bottom: 24px;
-          margin-top: 12px;
-          table-layout: auto;
-          break-inside: auto;
-        }
-        .bloque-tabla thead {
-          display: table-header-group;
-        }
-        .bloque-tabla tbody {
-          display: table-row-group;
-        }
-        .bloque-tabla tr {
-          page-break-inside: avoid;
-          break-inside: avoid;
-        }
-        .bloque-tabla th, .bloque-tabla td {
-          border: 1px solid #718096; /* Bordes finos gris */
-          padding: 8px 10px; /* Padding más cómodo */
-          text-align: left;
-          vertical-align: top;
-          word-wrap: break-word;
-          font-size: 10pt; /* Legible pero contenido */
-        }
-        .bloque-tabla th {
-          background-color: #e2e8f0; /* Gris institucional claro */
-          color: #1a202c;
-          font-weight: bold;
-        }
-        .bloque-tabla td {
-          background-color: #ffffff;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="contenido">
-        ${renderSecciones(secciones)}
-      </div>
-    </body>
-    </html>
-  `;
+      return `<table style="font-size:${d.fuente}pt">${b.titulo ? `<caption>${texto(b.titulo)}</caption>` : ''}<colgroup>${d.anchos.map((a)=>`<col style="width:${a}%"/>`).join('')}</colgroup><thead><tr>${(b.columnas || []).map((c,i) => `<th scope="col" style="text-align:${d.centradas[i]?'center':'left'}">${texto(c)}</th>`).join('')}</tr></thead><tbody>${(b.filas || []).map((f,j) => `<tr${d.dividirFilas[j]?' class="fila-larga"':''}>${f.map((c,i) => `<td style="text-align:${d.centradas[i]?'center':'left'}">${texto(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    }
+    return '';
+  }).join('');
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${escaparHTML(modulo.nombre || 'Programación didáctica')}</title><style>
+    *{box-sizing:border-box}body{font:11pt/1.45 Arial,sans-serif;color:#172033;margin:0;overflow-wrap:anywhere}
+    .portada{break-after:page;padding-top:45mm}.marca{font-size:10pt;letter-spacing:2px;text-transform:uppercase;color:#64748b}.portada h1{font-size:30pt;line-height:1.2;color:#19375a;margin:15mm 0 12mm}.portada dl{border-top:2px solid #19375a;padding-top:8mm}.portada dt{color:#64748b;font-size:9pt;margin-top:5mm}.portada dd{margin:1mm 0;font-size:12pt}
+    .indice{break-after:page}.indice h2{font-size:20pt;color:#19375a}.indice a{display:block;color:#19375a;text-decoration:none;margin:3mm 0;font-size:10pt}
+    h2,h3,h4,h5,h6{color:#19375a;break-after:avoid;margin:8mm 0 3mm;font-size:12pt}h2{font-size:16pt;border-bottom:1px solid #cbd5e1;padding-bottom:2mm}h3{font-size:14pt}.parrafo{margin:0 0 4mm;text-align:justify}li{margin-bottom:2mm}
+    table{width:100%;border-collapse:collapse;margin:4mm 0 6mm;table-layout:fixed;line-height:1.3;color:#111}th,td{border:0.6pt solid #555;padding:1.6mm;vertical-align:top;overflow-wrap:anywhere}th{background:#dedede;color:#111;font-weight:bold}caption{background:#808080;color:#fff;font-weight:bold;padding:1.6mm;border:0.6pt solid #555;border-bottom:0;text-align:center;break-after:avoid}thead{display:table-header-group}tr{break-inside:avoid}tr.fila-larga{break-inside:auto}p{orphans:3;widows:3}
+  </style></head><body>
+    <section class="portada"><p class="marca">Programación didáctica</p><h1>${texto(modulo.nombre || 'Documento completo')}</h1><dl>
+    ${[['Código',modulo.codigo],['Curso',modulo.curso],['Profesorado',modulo.profesor]].filter(([,v])=>v).map(([k,v])=>`<dt>${k}</dt><dd>${texto(v)}</dd>`).join('')}
+    </dl></section>
+    <nav class="indice" aria-label="Índice"><h2>Índice de contenidos</h2>${secciones.map((s,i)=>`<a href="#seccion-${i}" style="margin-left:${Math.min(Math.max((s.nivel || 1)-nivelBase,0),5)*5}mm">${escaparHTML(titulo(s))}</a>`).join('')}</nav>
+    ${secciones.map((s,i)=>{const h=Math.min(Math.max((s.nivel || 1)-nivelBase+2,2),6);return `<section id="seccion-${i}"><h${h}>${escaparHTML(titulo(s))}</h${h}>${bloques(s.bloques)}</section>`;}).join('')}
+  </body></html>`;
 }

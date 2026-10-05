@@ -20,6 +20,7 @@ import { aStrictGroqSchema, buildSystemPrompt, buildUserPrompt, ESQUEMA_JSON } f
  */
 
 async function llamarGroq({ config, model, messages, responseFormat, signal }) {
+  signal?.throwIfAborted();
   const controlador = new AbortController();
   const temporizador = setTimeout(() => controlador.abort(), config.timeoutMs || 120000);
 
@@ -128,12 +129,13 @@ export async function analizarConGroq({ config, text, moduleCode, model, signal 
     return { texto: contenido, usage, modeloEfectivo: modelo };
   } catch (error) {
     const lower = (error?.message || '').toLowerCase();
-    const soportaEsquema =
+    const falloFormato =
       !error?.retryable &&
       (error?.status === 400 || error?.status === 422) &&
-      (lower.includes('response_format') || lower.includes('json_schema') || lower.includes('structured'));
+      (lower.includes('response_format') || lower.includes('json_schema') || lower.includes('structured') ||
+       lower.includes('jsonschema') || lower.includes('does not match the expected schema'));
 
-    if (!soportaEsquema) throw error;
+    if (!falloFormato) throw error;
   }
 
   // Degradación 1: mismo modelo con json_object + esquema dentro del prompt.

@@ -29,6 +29,8 @@
 }
 
 :root {
+  --font-geist-sans: "Segoe UI";
+  --font-geist-mono: "Cascadia Code";
   color-scheme: light;
 }
 

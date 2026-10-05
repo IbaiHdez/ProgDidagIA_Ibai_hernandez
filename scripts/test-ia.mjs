@@ -164,7 +164,7 @@ test('el esquema de Groq usa una unión discriminada por tipo de bloque', () => 
   // Cada variante declara SOLO sus campos: es lo que evita "expected object, but got arr".
   assert.deepEqual(Object.keys(porTipo.texto.properties), ['tipo', 'texto']);
   assert.deepEqual(Object.keys(porTipo.lista.properties), ['tipo', 'items']);
-  assert.deepEqual(Object.keys(porTipo.tabla.properties), ['tipo', 'columnas', 'filas']);
+  assert.deepEqual(Object.keys(porTipo.tabla.properties), ['tipo', 'titulo', 'columnas', 'filas']);
 });
 
 test('el esquema de Groq cumple las reglas de strict que exige la API', () => {
@@ -175,7 +175,7 @@ test('el esquema de Groq cumple las reglas de strict que exige la API', () => {
 
   const seccion = estricto.properties.secciones.items;
   assert.equal(seccion.additionalProperties, false);
-  assert.deepEqual(seccion.required, ['codigo', 'titulo', 'nivel', 'orden', 'bloques']);
+  assert.deepEqual(seccion.required, ['sourceId', 'codigo', 'titulo', 'nivel', 'orden', 'bloques']);
 
   for (const variante of seccion.properties.bloques.items.anyOf) {
     assert.equal(variante.additionalProperties, false);
@@ -421,7 +421,7 @@ Contenido
 10.2. Desarrollo web en entorno servidor
 9.4.1 Resultados
 10.3. Despliegue`);
-  assert.deepEqual(detectarModulos(a).map((m) => m.codigo), ['10.1', '10.2', '10.3']);
+  assert.deepEqual(detectarModulos(a).map((m) => m.codigo), ['10.1', '10.2', '9.4.1', '10.3']);
 
   // Documento B: otra numeración, otro número de apartados y otros títulos
   const b = normalizarTexto(`3. Marco normativo
@@ -433,15 +433,13 @@ Contenido
 5.1. Actividades
 5.1.1. Prácticas
 6. Evaluación`);
-  assert.deepEqual(detectarModulos(b).map((m) => m.codigo), ['4.1', '5.1']);
+  assert.deepEqual(detectarModulos(b).map((m) => m.codigo), ['3', '4', '4.1', '4.1.1', '5', '5.1', '5.1.1', '6']);
 
   const r5 = recortarModulo(b, '5.1');
   assert.ok(r5.texto.startsWith('5.1. Actividades'));
   assert.ok(r5.texto.includes('5.1.1. Prácticas'), 'incluye sus subapartados');
   assert.ok(!r5.texto.includes('4. Objetivos'), 'no incluye el módulo anterior');
-  // Un apartado de un solo nivel ("6. Evaluación") NO cierra el recorte: dentro de
-  // un módulo hay listas numeradas igual de válidas y cortarlas perdería contenido.
-  // Para eso está el caso explícito del test siguiente.
+  assert.ok(!r5.texto.includes('6. Evaluación'), 'un título raíz reconocido cierra el apartado');
 });
 
 test('el recorte funciona con distintos formatos de encabezado', () => {
@@ -502,12 +500,10 @@ function documentoLargo(numApartados = 40, relleno = 400) {
 
 /** Simula a la IA: devuelve los apartados que aparecen en ese fragmento. */
 function seccionesDelFragmento(texto) {
-  return [...texto.matchAll(/^\s*(9\.4\.\d+)\s+(.+)$/gm)].map((m) => ({
-    codigo: m[1],
-    titulo: m[2].trim(),
-    nivel: 3,
-    bloques: [{ tipo: 'texto', texto: `Contenido de ${m[1]}` }],
-  }));
+  return [...texto.matchAll(/\[APARTADO sourceId="([^"]+)" parte="\d+"\]\n([^\n]*)\n([\s\S]*?)\n\[\/APARTADO\]/g)].map((m) => {
+    const encabezado = m[2].match(/^(\S+)\s+(.*)$/);
+    return { sourceId: m[1], codigo: encabezado?.[1] || '', titulo: encabezado?.[2] || '', nivel: 3, bloques: [{ tipo: 'texto', texto: m[3] }] };
+  });
 }
 
 test('fragmentarTexto no toca los documentos cortos', () => {
@@ -568,6 +564,61 @@ test('el análisis fragmentado procesa todo y devuelve el documento unido', asyn
   assert.equal(progreso.at(-1).fase, 'terminado');
 });
 
+test('revisión automática recupera una tabla omitida sin repetir apartados válidos', async () => {
+  cascadaCompleta();
+  const enviados = [];
+  mockFetch(({ body }) => {
+    const texto = body.contents?.[0]?.parts?.[0]?.text || '';
+    enviados.push(texto);
+    const secciones = seccionesDelFragmento(texto);
+    if (enviados.length === 1) secciones[1].bloques = [{tipo:'texto',texto:'resumen incorrecto'}];
+    return okGemini(JSON.stringify({modulo:{},secciones}));
+  });
+  const {data,meta} = await analizarDocumentoFragmentado('10.2.1 Introducción\nTexto completo.\n10.2.5 Situaciones\nRA1 15%\nRA2 85%');
+  assert.equal(enviados.length,2);
+  assert.doesNotMatch(enviados[1],/Texto completo/);
+  assert.equal(meta.partesRecuperadas,1);
+  assert.equal(meta.avisos.length,0);
+  assert.equal(data.secciones[1].bloques[0].texto,'RA1 15%\nRA2 85%');
+});
+
+test('revisión fallida es acotada y explica la pérdida conservando el original', async () => {
+  cascadaCompleta();
+  const llamadas = mockFetch(({body}) => {
+    const secciones = seccionesDelFragmento(body.contents?.[0]?.parts?.[0]?.text || '');
+    secciones.forEach((s)=>{ s.bloques=[{tipo:'texto',texto:'RA1 10%'}]; });
+    return okGemini(JSON.stringify({modulo:{},secciones}));
+  });
+  const {data,meta} = await analizarDocumentoFragmentado('10.2.5 Situaciones\nRA1 15%');
+  assert.equal(llamadas.length,2);
+  assert.equal(meta.reintentosIntegridad,1);
+  assert.equal(meta.partesRecuperadas,0);
+  assert.match(meta.avisos[0],/faltaban 1 términos/);
+  assert.deepEqual(data.secciones[0].bloques,[{tipo:'texto',texto:'RA1 15%'}]);
+  assert.equal(data.secciones[0].revisar,true);
+});
+
+test('Groq recupera un fallo de generación del esquema mediante JSON validado localmente', async () => {
+  soloProveedor('groq');
+  const formatos=[];
+  mockFetch(({body})=>{
+    formatos.push(body.response_format.type);
+    return body.response_format.type==='json_schema'
+      ? errorGroq(400, 'Generated JSON does not match the expected schema. Error: jsonschema: /secciones/1')
+      : okGroq();
+  });
+  const {data}=await analizarDocumento('Texto');
+  assert.deepEqual(formatos,['json_schema','json_object']);
+  assert.equal(data.secciones.length,2);
+});
+
+test('cuota agotada no se presenta como modelo inexistente', () => {
+  const e=toProviderError({status:429,message:'You exceeded your current quota, please check your plan and billing details.'},{provider:'gemini',model:'modelo'});
+  assert.equal(e.code,'QUOTA_EXCEEDED');
+  assert.equal(e.retryable,false);
+  assert.equal(isModelUnavailableError(e),false);
+});
+
 test('un fragmento fallido no tira el trabajo: se avisa y se continúa', async () => {
   cascadaCompleta();
   let primeraFirma = null;
@@ -597,15 +648,16 @@ test('un fragmento fallido no tira el trabajo: se avisa y se continúa', async (
   assert.ok(data.secciones.length > 0, 'conserva lo que sí se pudo analizar');
 });
 
-test('si fallan todos los fragmentos se propaga el error', async () => {
+test('si fallan todos los fragmentos se conserva todo el texto y se avisa', async () => {
   cascadaCompleta();
   globalThis.fetch = async (url) =>
     esGeminiUrl(url) ? errorGemini(503, 'high demand') : errorGroq(500, 'Internal error');
 
-  await assert.rejects(() => analizarDocumentoFragmentado(documentoLargo(), {}), (error) => {
-    assert.equal(error.isUnavailable, true);
-    return true;
-  });
+  const { data, meta } = await analizarDocumentoFragmentado(documentoLargo(), {});
+  assert.equal(data.secciones.length, 40);
+  assert.equal(meta.fragmentosOk, 0);
+  assert.ok(meta.avisos.length > 0);
+  assert.ok(data.secciones.every((s) => s.revisar));
 });
 
 test('sin API keys configuradas el error es explícito', async () => {

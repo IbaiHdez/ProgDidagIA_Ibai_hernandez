@@ -1,194 +1,133 @@
 # ProgDidactAI
 
-## Descripción
-ProgDidactAI permite importar una programación didáctica en PDF o Word, analizarla mediante inteligencia artificial, transformarla en información estructurada editable, almacenarla en MongoDB y exportarla posteriormente a PDF y Word.
-
-## Tecnologías utilizadas
-- Next.js 16 (App Router) y React 19
-- Tailwind CSS 4
-- MongoDB Atlas y Mongoose
-- **Groq API** y **Google Gemini** (con cascada automática entre ambos)
-- pdf-parse, mammoth y docx
-- Puppeteer
-
-## Requisitos
-- Node.js 20 o superior
-- npm
-- MongoDB local (o una cuenta en MongoDB Atlas)
-- Al menos una API key gratuita: Groq (https://console.groq.com/keys) o Google AI Studio (https://aistudio.google.com/apikey)
+Aplicación para importar programaciones didácticas en PDF o DOCX, conservar su estructura, organizar el contenido con IA, revisarlo, guardarlo en MongoDB y exportarlo a PDF o Word.
 
 ## Instalación
-Para instalar y configurar el proyecto, ejecuta los siguientes comandos en tu terminal:
+
+Requisitos: Node.js 20.19 o posterior compatible con las dependencias, npm y MongoDB local o Atlas. Las versiones exactas están fijadas en `package-lock.json`.
 
 ```bash
-git clone <url-del-repositorio>
-cd ProgDidactAI
-npm install
+npm ci
 ```
 
-## Variables de entorno
-Copia el archivo de ejemplo y edita tus credenciales:
+Copia `.env.example` a `.env.local` y configura `MONGODB_URI`. Para la estructuración automática añade al menos `GEMINI_API_KEY` o `GROQ_API_KEY`. No publiques tus credenciales.
 
-```bash
-cp .env.example .env.local
-```
-
-Obligatorias:
-- `GROQ_API_KEY`: API key de Groq (https://console.groq.com/keys), motor de respaldo.
-- `GEMINI_API_KEY`: API key de Google AI Studio (https://aistudio.google.com/apikey), motor principal.
-- `MONGODB_URI`: cadena de conexión de MongoDB.
-
-### Base de datos local (sin Atlas)
-
-No necesitas Atlas para probar el proyecto. Si tienes MongoDB instalado:
-
-```bash
-# Ubuntu/Debian: arranca el servicio (ya viene escuchando en 127.0.0.1:27017)
-sudo systemctl start mongod
-
-# Comprueba que responde y crea la base de datos
-mongosh "mongodb://127.0.0.1:27017/progdidactai" --eval 'db.runCommand({ping:1})'
-```
-
-Y en `.env.local`:
-
-```
-MONGODB_URI=mongodb://127.0.0.1:27017/progdidactai
-```
-
-Para volver a Atlas, cambia esa misma variable por la cadena `mongodb+srv://...`.
-
-Con **una sola** de las dos claves de IA la aplicación funciona: si falta la otra, la cascada simplemente la salta.
-
-Opcionales (todo tiene un valor por defecto razonable):
-
-| Variable | Por defecto | Para qué sirve |
-| --- | --- | --- |
-| `AI_PROVIDER_ORDER` | `gemini,groq` | Orden en el que se prueban los motores. |
-| `GROQ_MODELS` | `openai/gpt-oss-120b,openai/gpt-oss-20b` | Modelos de Groq a probar, en orden. |
-| `GEMINI_MODELS` | `gemini-3.8-flash,gemini-3.5-flash-lite` | Modelos de Gemini a probar, en orden. |
-| `AI_MAX_ATTEMPTS` | `3` | Reintentos por modelo antes de cambiar de motor. |
-| `AI_ERROR_COOLDOWN_MS` | `2000` | Espera base del backoff exponencial entre reintentos. |
-| `AI_MAX_BACKOFF_MS` | `8000` | Tope máximo de esa espera. |
-| `AI_TIMEOUT_MS` | `120000` | Timeout por petición al proveedor. |
-| `GROQ_MAX_TOKENS` | `32768` | Súbelo si algún módulo se trunca por longitud (máx. real: 65536). |
-| `GEMINI_MAX_TOKENS` | `65536` | Ídem para Gemini. |
-| `AI_CHUNK_CHARS` | `14000` | Caracteres por fragmento al trocear documentos largos. |
-
-### Modelos verificados con las cuentas gratuitas
-
-| Proveedor | Modelos | Notas |
-| --- | --- | --- |
-| Groq | `openai/gpt-oss-120b`, `openai/gpt-oss-20b` | `llama-3.3-70b-versatile` devuelve **404** (`does not exist or you do not have access`). |
-| Gemini | `gemini-3.8-flash`, `gemini-3.5-flash-lite` | Los modelos 2.5 devuelven **404** para cuentas nuevas (`no longer available to new users`). `gemini-3.8-flash` da 503 con frecuencia por demanda alta, por eso la cascada y los reintentos son imprescindible. |
-
-## Ejecutar en desarrollo
 ```bash
 npm run dev
 ```
-Y abre en tu navegador: [http://localhost:3000](http://localhost:3000)
 
-## Funcionamiento
-1. Nueva programación: accede al asistente para crear una nueva.
-2. Subir documento: sube la programación en **PDF o Word (.docx)**, con clic o arrastrando.
-3. Extraer: se detecta la jerarquía de módulos del documento (`10.1`, `10.2`...) y puedes elegir cuál procesar; la app recorta ese módulo automáticamente.
-4. Analizar: la IA convierte el texto en JSON estructurado (apartados, listas y tablas).
-5. Revisar y editar: utiliza el formulario dinámico para corregir lo necesario, incluidos los títulos y su numeración.
-6. Guardar en MongoDB: guarda tu programación en la base de datos.
-7. Consultar desde Mis programaciones: lista, edita, exporta o elimina cualquier programación.
-8. Exportar PDF: documento con plantilla institucional (Puppeteer).
-9. Exportar Word: documento DOCX totalmente editable.
+Abre http://localhost:3000. Para producción local:
 
-## Inteligencia artificial: dos motores con cascada automática
-
-Gemini se satura con mucha facilidad (`429`, `503`, "high demand"), así que la aplicación **nunca depende de un único proveedor**. El orquestador (`src/lib/ai/index.js`) recorre candidatos en cascada:
-
-```
-gemini/gemini-3.8-flash
-  ↓
-gemini/gemini-3.5-flash-lite
-  ↓
-groq/openai/gpt-oss-120b
-  ↓
-groq/openai/gpt-oss-20b
+```bash
+npm run build
+npm start
 ```
 
-El orden se cambia con `AI_PROVIDER_ORDER`, y los modelos de cada proveedor con `GEMINI_MODELS` y `GROQ_MODELS`.
+La interfaz usa tipografías del sistema: compilar no necesita descargar Google Fonts. Puppeteer necesita su instalación de Chrome for Testing para exportar PDF (se descarga normalmente al instalar sus dependencias).
 
-- **Reintentos con backoff exponencial + jitter** para errores transitorios (429, 5xx, errores de red, 503 "high demand") dentro del mismo modelo.
-- **Salto inmediato** al siguiente candidato ante errores definitivos: modelo inexistente o sin acceso, credenciales inválidas, esquema rechazado o respuesta truncada. Un modelo que devuelve 404 no se reintenta: se pierde el tiempo.
-- **Circuit breaker**: si un motor acumula 3 fallos seguidos se lo salta durante 30 s (hasta 5 min si sigue fallingando), para no encadenar reintentos mientras la API está caída.
-- **Degradación de formato en Groq**: `json_schema` → `json_object` → esquema dentro del prompt, porque no todos los modelos de Groq aceptan salida estructurada.
-- **Fragmentación**: los documentos largos se trocean por encabezados (`AI_CHUNK_CHARS`) y se analizan fragmento a fragmento, fusionando después los resultados. Si un fragmento falla, se conserva el resto y se avisa.
-- **Saneado de la respuesta** (`src/lib/ai/sanitize.js`): aunque el JSON sea válido, los modelos inventan tipos. La app normaliza niveles, tipos de bloque, filas de tabla, vallas de markdown y arrays en la raíz antes de devolverlo al editor. Todos los proveedores terminan en la **misma estructura interna** `{ modulo, secciones }`, que es la que usan el editor, el DAO y las exportaciones.
-- Si **todos** los candidatos fallan, la API responde `503` enumerando proveedor, modelo, motivo e intento de cada fallo.
-- `GET /api/analyze` devuelve el estado de cada motor (configurado, listo o saturado) y la interfaz lo muestra en pantalla.
+## Uso
 
-### Por qué el esquema de Groq es distinto al de Gemini
+1. Sube un PDF con texto o un archivo DOCX, de hasta 30 MB. Los PDF escaneados requieren OCR previo.
+2. Revisa el listado de apartados. Se muestran todos los niveles detectados y puedes buscar por número o título.
+3. Elige **Documento completo** o un apartado con sus descendientes. La selección usa posiciones del texto; los errores de numeración del original se conservan.
+4. Si la extracción ha separado o confundido un encabezado, abre **Ver texto extraído y corregir encabezados**, activa las correcciones y pulsa **Aplicar correcciones**. El índice se recalcula.
+5. Pulsa **Abrir conservando las tablas**. Este modo no necesita IA: mantiene las tablas detectadas y organiza el texto en párrafos. Si quieres organizar también el texto con IA, activa la casilla opcional. Las tablas originales quedan protegidas en ambos modos. Puedes cancelar; los errores vuelven a la selección conservando el documento.
+6. Revisa los bloques de texto, listas y tablas. Los apartados que conservan texto sin estructurar quedan marcados **Por revisar**.
+7. Guarda. Puedes volver a modificar el contenido y guardar otra vez, incluso con Ctrl/Cmd+S. Las exportaciones se habilitan cuando la versión visible está guardada.
+8. Desde **Mis programaciones**, abre, busca, exporta o elimina los documentos guardados.
 
-Groq exige que en modo `strict` **todas** las claves estén en `required`. Con un único objeto de bloque que declara a la vez `texto`, `items` y `columnas`/`filas`, el modelo tiene que rellenar los tres campos aunque no apliquen, mete filas dentro de `items` y la API rechaza la respuesta con:
+## Estructura y conservación del contenido
 
-```
-Generated JSON does not match the expected schema ... expected object, but got arr
-```
+`src/lib/estructura.js` detecta encabezados de distintas profundidades, algunos títulos sin número y títulos partidos en dos líneas. Descarta entradas de índice con puntos guía y evita confundir notas decimales como `0.75` con apartados. Cada encabezado tiene una identidad basada en su posición; dos códigos iguales pueden representar secciones distintas.
 
-La solución (`src/lib/ai/schema.js`) es declarar `bloques` como una unión discriminada por `tipo`: cada variante solo contiene los campos de su tipo (`texto`, `items` o `columnas`+`filas`). El resultado es idéntico en ambos proveedores y el saneado lo unifica.
+La detección es heurística. Documentos con diseños inusuales, columnas o encabezados ambiguos requieren revisar el listado o corregir el texto extraído. No se promete reconstrucción visual idéntica del PDF original.
+
+`src/lib/ai/fragmentar.js` crea un plan por secciones. Los apartados pequeños viajan juntos; los grandes se dividen en partes acotadas que conservan su identidad. No hay solapamiento ni deduplicación que descarte continuaciones. Prioriza los límites de unidades o fichas numeradas (sin códigos o nombres específicos del documento) y los párrafos antes de cortar una tabla por tamaño. Incluso los párrafos sin saltos tienen un límite de tamaño. Las pruebas reconstruyen el texto de todas las partes para comprobar que no se pierde contenido.
+
+La IA recibe identificadores de apartado y debe devolver bloques asociados a ellos. El servidor conserva los títulos y el orden de origen. Compara los términos y cifras del texto fuente normalizando diferencias de formato (palabras partidas, viñetas extraídas, cabeceras repetidas o generadas). No acepta resúmenes, omisiones del cuerpo ni cifras alteradas. Si detecta diferencias, hace una segunda pasada acotada sobre las partes afectadas, indicando los términos pendientes; si no consigue verificarlas, conserva el original y explica el motivo. Cada solicitud tiene un límite y el análisis dispone de un presupuesto total de cuatro minutos: si lo agota, devuelve los apartados completados y conserva como texto los pendientes. La cancelación explícita del usuario sí detiene el trabajo. Esta comprobación no equivale a una validación semántica: no demuestra que cada dato se haya colocado en la celda correcta. Cada apartado conserva además su texto original en MongoDB: puedes compararlo o restaurarlo desde el editor. Un resultado sin IA sigue siendo editable, pero puede necesitar reconstrucción manual de tablas.
+
+**Documento completo** incluye todo el archivo, aunque empiece a mitad de un módulo o termine entrando en otro. El texto anterior al primer encabezado se conserva como **Contenido inicial**. Para exportar solo DWES, selecciona su encabezado `10.2`.
+
+## Tablas en PDF y Word
+
+Ambas exportaciones usan un cálculo común de anchos: las columnas de descripciones reciben más espacio que las de cifras o marcas. Mantienen filas, columnas, celdas vacías y saltos internos; repiten las cabeceras entre páginas y permiten continuar las filas demasiado largas. Los rótulos originales se exportan como cabecera de tabla (celda combinada en Word). No se deduplican filas del cuerpo.
+
+La importación de PDF analiza también su geometría: detecta cuadrículas con bordes trazados o dibujados mediante rectángulos finos. Conserva el contenido de las celdas, sus combinaciones, anchos relativos y fondos detectados. Las tablas viajan como bloques protegidos y nunca se envían a la IA para que las reescriba. El editor permite modificar sus celdas manteniendo el diseño; para cambiar filas o columnas, ofrece una conversión explícita a tabla simple.
+
+La reconstrucción no es una copia visual exacta: las tablas sin bordes o con geometría no reconocible pueden quedar como texto; las imágenes, fuentes y saltos de página originales no se reproducen automáticamente. Los PDF escaneados necesitan OCR externo. DOCX mantiene por ahora su ruta de extracción de texto. Si falla el análisis geométrico de una página, se conserva su texto y se muestra un aviso.
+
+El adaptador `src/lib/pdfLayout.js` utiliza el cargador y las primitivas geométricas de `pdf-parse` y los operadores de PDF.js. Sus versiones están fijadas a `2.4.5` y `5.4.296`; al actualizarlas deben ejecutarse las regresiones de geometría y conservación del texto.
+
+## IA y configuración
+
+Gemini y Groq se prueban en cascada según la configuración. Los modelos indicados son valores configurados, no una garantía de disponibilidad en todas las cuentas. Cambia los identificadores si el proveedor los retira o tu cuenta no tiene acceso.
+
+| Variable | Valor predeterminado | Función |
+| --- | --- | --- |
+| `AI_PROVIDER_ORDER` | `gemini,groq` | Orden de proveedores |
+| `GEMINI_MODELS` | `gemini-3.8-flash,gemini-3.5-flash-lite` | Modelos de Gemini |
+| `GROQ_MODELS` | `openai/gpt-oss-120b,openai/gpt-oss-20b` | Modelos de Groq |
+| `AI_MAX_ATTEMPTS` | `3` | Intentos por candidato |
+| `AI_ERROR_COOLDOWN_MS` | `2000` | Base de la espera entre intentos |
+| `AI_MAX_BACKOFF_MS` | `8000` | Espera máxima |
+| `AI_TIMEOUT_MS` | Groq: `120000`; Gemini: `180000` | Tiempo de una petición |
+| `GROQ_MAX_TOKENS` | `32768` | Límite de salida de Groq |
+| `GEMINI_MAX_TOKENS` | `65536` | Límite de salida de Gemini |
+| `AI_CHUNK_CHARS` | `14000` | Presupuesto por fragmento; mínimo 512 |
+
+Las respuestas se validan y normalizan. Groq puede degradar de `json_schema` a `json_object` y después a instrucciones de formato. El circuito de cada proveedor se enfría tras fallos transitorios reiterados. Los errores definitivos pasan al siguiente candidato.
 
 ## Arquitectura
-**Flujo de datos (backend):**
-Frontend ↓ API Routes ↓ Servicios (IA / documentos) ↓ DAO ↓ MongoDB
 
-**Flujo de transformación de documento:**
-PDF/Word ↓ Extracción y recorte por jerarquía ↓ IA (Groq ⇄ Gemini) ↓ JSON saneado ↓ Formulario ↓ MongoDB ↓ PDF / Word
-
-```
-src/lib/
-├── ai/
-│   ├── index.js          # Orquestador: cascada, reintentos y diagnóstico
-│   ├── config.js         # Proveedores y modelos desde variables de entorno
-│   ├── errors.js         # Clasificación de errores reintentables/definitivos
-│   ├── circuitBreaker.js # Circuit breaker por proveedor
-│   ├── sanitize.js       # Saneado y validación del JSON de la IA
-│   ├── schema.js         # Esquema de salida + prompts compartidos
-│   └── providers/        # Implementación de Groq y de Gemini
-└── documento.js          # Extracción de PDF/Word y recorte por módulo
+```text
+React → rutas API de Next.js
+  ├─ Extracción PDF/DOCX → estructura → selección
+  ├─ Plan de fragmentos → Gemini/Groq → revisión de conservación
+  └─ Editor → validación → ProgramacionDAO → MongoDB
+                                            └─ PDF / DOCX
 ```
 
-## Patrón DAO
-Las rutas API no acceden directamente a los modelos de Mongoose. Toda la lógica de persistencia se canaliza a través de un único `ProgramacionDAO`, separando así las responsabilidades.
+Datos principales: `{ modulo: { codigo, nombre, curso, profesor }, secciones: [{ sourceId, codigo, titulo, nivel, orden, revisar, textoOriginal, bloques }] }`. Los bloques son de tipo `texto`, `lista` o `tabla`; las tablas admiten un `titulo` opcional y metadatos `diseno` para la geometría original, conservados en el editor, MongoDB y ambas exportaciones. Se validan los límites y combinaciones de celdas para impedir que oculten contenido. Los datos de entrada se limitan a campos permitidos antes de llegar al DAO.
+
+Rutas principales:
+
+| Ruta | Métodos | Uso |
+| --- | --- | --- |
+| `/api/extract` | POST | Extraer texto y listar apartados |
+| `/api/analyze` | POST / GET / DELETE | Iniciar, consultar y cancelar un análisis |
+| `/api/programaciones` | GET / POST | Listar y crear |
+| `/api/programaciones/:id` | GET / PUT / DELETE | Leer, editar y eliminar |
+| `/api/programaciones/:id/pdf` | GET | Exportar PDF |
+| `/api/programaciones/:id/word` | GET | Exportar Word |
 
 ## Exportaciones
-- **PDF institucional:** plantilla HTML y renderizado headless con Puppeteer.
-- **Word editable:** librería `docx` para generar un documento nativo y editable.
 
-## Tests
-Los tests simulan ambas APIs (no consumen cuota ni necesitan claves reales) y cubren la cascada, los reintentos, el circuit breaker, la degradación de formato, el saneado del JSON y el recorte de módulos:
+PDF: portada con los datos del documento, índice con enlaces, títulos jerárquicos, tablas y páginas numeradas. Se escapa el contenido HTML y se deshabilitan JavaScript y peticiones HTTP externas durante el renderizado.
+
+Word: documento nativo editable con portada, estilos de título, tabla de contenido y numeración. Word puede pedir actualizar los campos al abrirlo; acepta la actualización para calcular las páginas del índice.
+
+## Comprobaciones
 
 ```bash
 npm test
+npm run lint
+npm run build
 ```
 
-## Estructura del proyecto
-```
-ProgDidactAI/
-├── public/                 # Archivos estáticos
-├── scripts/                # Tests de la capa de IA (npm test)
-├── src/
-│   ├── app/                # Rutas y páginas de Next.js (Frontend y API)
-│   ├── components/         # Componentes React reutilizables (ProgramacionEditor)
-│   ├── dao/                # Objetos de Acceso a Datos (ProgramacionDAO)
-│   ├── lib/                # Capa de IA, extracción de documentos y plantillas
-│   └── models/             # Esquemas de Mongoose
-├── .env.example            # Variables de entorno de ejemplo
-├── next.config.mjs         # Configuración de Next.js
-└── package.json            # Dependencias y scripts
-```
+Los tests de proveedores usan respuestas simuladas y no consumen cuota ni requieren claves reales. Cubren cascada, formatos de respuesta, normalización, conservación de fragmentos, selección completa/parcial, errores del sondeo, validación y escape HTML.
 
-## Problemas frecuentes
-- **"Todos los servicios de IA están saturados"**: ambos motores están caídos a la vez. Reintenta en unos minutos; si solo falla uno, la app ya saltó al otro automáticamente.
-- **Respuesta truncada**: el módulo es muy largo para el límite de tokens. Sube `GROQ_MAX_TOKENS` / `GEMINI_MAX_TOKENS` o procesa el módulo por partes.
-- **"No se encontró el encabezado del módulo 10.2"**: ese código no aparece como apartado de dos niveles en el PDF. Elige otro en la lista de módulos detectados o procesa el documento completo.
-- **PDF escaneado**: al ser imágenes no contiene texto. Necesita pasarse por OCR antes de subirse.
+Si está presente `PD_DAW_25-26_DWES.pdf`, se ejecutan también las regresiones del caso real: 23 títulos, 20 encabezados al seleccionar DWES, conservación de numeración irregular y reconstrucción completa de los fragmentos. Se comprueban además 51 tablas originales, 25 en el apartado de situaciones de aprendizaje, y la igualdad de todos los términos y cifras respecto a la extracción de texto. Si falta el archivo, se omiten estas pruebas del caso real; se mantienen las pruebas sintéticas de geometría, validación y exportación.
 
-## Autor
-Ibai Hernández Ruiz
+## Límites del despliegue actual
+
+- Aplicación de un único usuario o entorno local de confianza. No tiene autenticación ni aislamiento de documentos por usuario. Hace falta añadirlos antes de publicarla en Internet.
+- Los análisis viven en memoria de una única instancia. Caducan a los 30 minutos y se pierden al reiniciar el servidor. Hay dos análisis simultáneos como máximo y un límite de ejecución de 270 segundos. Para procesos mayores o varias instancias, hace falta una cola persistente y un worker.
+- MongoDB guarda la última versión de cada programación; no se implementa historial de versiones ni edición colaborativa.
+- Se importa un archivo cada vez. Un archivo puede contener varios módulos y exportarse completo; no hay consolidación de varios registros guardados en un único archivo.
+- La calidad de tablas y contenido extraído debe revisarse antes de una entrega oficial. Las plantillas son genéricas y no incluyen logotipos ni certificación institucional.
+
+## Entrega
+
+Excluye `node_modules`, `.next`, `.env.local` y archivos temporales del ZIP. Incluye fuentes, `package.json`, `package-lock.json`, `.env.example` sin credenciales y este README.
+
+Autor: Ibai Hernández Ruiz.
