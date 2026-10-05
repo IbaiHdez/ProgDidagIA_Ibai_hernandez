@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------
+   ProgDidactAI · sistema visual
+   Objetivo: interfaz clara y elegante para profesorado no técnico.
+   Sin librerías externas: solo Tailwind y un puñado de estilos propios.
+------------------------------------------------------------------ */
+
+@theme {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Acento de marca: azul oscuro, legible y con buen contraste */
+  --color-brand-50: #eff5ff;
+  --color-brand-100: #dbe7ff;
+  --color-brand-200: #bfd3ff;
+  --color-brand-300: #93b4ff;
+  --color-brand-400: #6088ff;
+  --color-brand-500: #3b63f6;
+  --color-brand-600: #254aeb;
+  --color-brand-700: #1d38d7;
+  --color-brand-800: #1e2fae;
+  --color-brand-900: #1e2d89;
+
+  /* Superficies cálidas, menos clínico que un gris puro */
+  --color-canvas: #f7f8fb;
+  --color-surface: #ffffff;
+  --color-line: #e6e8f0;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: #0f172a;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Foco visible y consistente: imprescindible para uso con teclado */
+:focus-visible {
+  outline: 2px solid var(--color-brand-600);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Barra de desplazamiento discreta, acorde al tono de la app */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+}
+
+/* ---------------------------------------------------------------
+   Animaciones
+------------------------------------------------------------------ */
+
+@keyframes pd-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pd-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes pd-pop {
+  0%   { opacity: 0; transform: scale(0.96) translateY(6px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes pd-shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+
+@keyframes pd-spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-fade-up { animation: pd-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-fade-in { animation: pd-fade-in 0.3s ease both; }
+.animate-pop     { animation: pd-pop 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-spin-slow { animation: pd-spin 1s linear infinite; }
+
+.skeleton {
+  background: linear-gradient(90deg, #eef1f6 25%, #e2e8f0 37%, #eef1f6 63%);
+  background-size: 200% 100%;
+  animation: pd-shimmer 1.4s ease infinite;
+}
+
+/* Respeta la preferencia de reducir movimiento */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------
+   Utilidades
+------------------------------------------------------------------ */
+
+/* Degradado de marca para cabeceras y botones destacados */
+.brand-gradient {
+  background-image: linear-gradient(135deg, var(--color-brand-600) 0%, #4f46e5 55%, #6d28d9 100%);
+}
+
+/* Rejilla de puntos para el fondo de la portada */
+.hero-grid {
+  background-image: radial-gradient(circle at 1px 1px, rgba(37, 74, 235, 0.13) 1px, transparent 0);
+  background-size: 26px 26px;
+}
+
+/* Oculta la barra de deslocamiento en carruseles horizontales */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ---------------------------------------------------------------
+   Campos de formulario: un único estilo para toda la aplicación
+------------------------------------------------------------------ */
+
+.campo {
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: #0f172a;
+  background-color: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.campo::placeholder { color: #94a3b8; }
+.campo:hover { border-color: #cbd5e1; }
+
+.campo:focus {
+  outline: none;
+  border-color: var(--color-brand-500);
+  box-shadow: 0 0 0 3px rgb(59 99 246 / 0.14);
+}
+
+.campo-mono { font-family: var(--font-mono); }
