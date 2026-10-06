@@ -34,7 +34,7 @@ La interfaz usa tipografías del sistema: compilar no necesita descargar Google 
 5. Pulsa **Abrir conservando las tablas**. Este modo no necesita IA: mantiene las tablas detectadas y organiza el texto en párrafos. Si quieres organizar también el texto con IA, activa la casilla opcional. Las tablas originales quedan protegidas en ambos modos. Puedes cancelar; los errores vuelven a la selección conservando el documento.
 6. Revisa los bloques de texto, listas y tablas. Los apartados que conservan texto sin estructurar quedan marcados **Por revisar**.
 7. Guarda. Puedes volver a modificar el contenido y guardar otra vez, incluso con Ctrl/Cmd+S. Las exportaciones se habilitan cuando la versión visible está guardada.
-8. Desde **Mis programaciones**, abre, busca, exporta o elimina los documentos guardados.
+8. Desde **Mis programaciones**, abre, busca, filtra por estado, exporta o elimina los documentos guardados. Cada tarjeta muestra su estado —**Por revisar**, **Lista para entregar** o **Exportada**—, el número de apartados y tablas, y avisa si has cambiado algo después de exportar.
 
 ## Estructura y conservación del contenido
 
@@ -95,7 +95,7 @@ Rutas principales:
 | --- | --- | --- |
 | `/api/extract` | POST | Extraer texto y listar apartados |
 | `/api/analyze` | POST / GET / DELETE | Iniciar, consultar y cancelar un análisis |
-| `/api/programaciones` | GET / POST | Listar y crear |
+| `/api/programaciones` | GET / POST | Listar (resúmenes con estado del panel) y crear |
 | `/api/programaciones/:id` | GET / PUT / DELETE | Leer, editar y eliminar |
 | `/api/programaciones/:id/pdf` | GET | Exportar PDF |
 | `/api/programaciones/:id/word` | GET | Exportar Word |
@@ -114,7 +114,7 @@ npm run lint
 npm run build
 ```
 
-Los tests de proveedores usan respuestas simuladas y no consumen cuota ni requieren claves reales. Cubren cascada, formatos de respuesta, normalización, conservación de fragmentos, selección completa/parcial, errores del sondeo, validación y escape HTML.
+Los tests de proveedores usan respuestas simuladas y no consumen cuota ni requieren claves reales. Cubren cascada, formatos de respuesta, normalización, conservación de fragmentos, selección completa/parcial, errores del sondeo, validación, escape HTML y panel de estado.
 
 Si está presente `PD_DAW_25-26_DWES.pdf`, se ejecutan también las regresiones del caso real: 23 títulos, 20 encabezados al seleccionar DWES, conservación de numeración irregular y reconstrucción completa de los fragmentos. Se comprueban además 51 tablas originales, 25 en el apartado de situaciones de aprendizaje, y la igualdad de todos los términos y cifras respecto a la extracción de texto. Si falta el archivo, se omiten estas pruebas del caso real; se mantienen las pruebas sintéticas de geometría, validación y exportación.
 

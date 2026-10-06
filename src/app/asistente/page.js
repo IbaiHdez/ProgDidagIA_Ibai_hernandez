@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ProgramacionEditor from '@/components/ProgramacionEditor';
-import { Boton, Tarjeta, Icono, Etiqueta, Aviso, Progreso, Pasos } from '@/components/ui';
+import { Boton, Tarjeta, Icono, Etiqueta, Aviso, Confirmar, Progreso, Pasos } from '@/components/ui';
 import { detectarApartados, normalizarTexto, recortarApartado } from '@/lib/estructura';
 import { esperarAnalisis } from '@/lib/analysisClient';
 import { patronTablas, textoTabla } from '@/lib/tablasOriginales';
@@ -21,6 +21,7 @@ export default function Asistente() {
   const [error, setError] = useState('');
   const [arrastrando, setArrastrando] = useState(false);
   const [progreso, setProgreso] = useState(null);
+  const [pidiendoReinicio, setPidiendoReinicio] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [meta, setMeta] = useState(null);
   const [motores, setMotores] = useState(null);
@@ -80,7 +81,11 @@ export default function Asistente() {
     job.current = null; setFase(texto ? 'elegir' : 'subir');
   };
   const reiniciar = () => {
-    if (resultado && !confirm('¿Procesar otro documento? Asegúrate de haber guardado tus cambios.')) return;
+    if (resultado) return setPidiendoReinicio(true);
+    hacerReinicio();
+  };
+  const hacerReinicio = () => {
+    setPidiendoReinicio(false);
     cancelar(); setArchivo(null); setTexto(''); setTablas({}); setAvisosExtraccion([]); setResultado(null); setMeta(null); setSeleccion(''); setError(''); setFase('subir');
   };
 
@@ -98,6 +103,16 @@ export default function Asistente() {
           <ul className="list-disc pl-5 mt-2 space-y-1">{meta.avisos.map((a, i) => <li key={i}>{a}</li>)}</ul></details>
       </Aviso>}
       <ProgramacionEditor datosIniciales={resultado} />
+
+      <Confirmar
+        abierto={pidiendoReinicio}
+        titulo="¿Procesar otro documento?"
+        descripcion="Asegúrate de haber guardado tus cambios: al continuar se descartará el resultado actual."
+        textoConfirmar="Continuar"
+        tono="info"
+        onCancelar={() => setPidiendoReinicio(false)}
+        onConfirmar={hacerReinicio}
+      />
     </div>
   );
 
