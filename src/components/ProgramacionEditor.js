@@ -2,7 +2,7 @@
 import { mapaCeldas } from '@/lib/tablasOriginales';
 
 import { useEffect, useMemo, useState } from "react";
-import { Boton, Tarjeta, Icono, Etiqueta, Notificacion, useNotificacion } from "@/components/ui";
+import { Boton, Tarjeta, Icono, Etiqueta, Confirmar, Notificacion, useNotificacion } from "@/components/ui";
 
 /** Array vacío estable: evita recrear referencias en cada render. */
 const EMPTY = [];
@@ -27,6 +27,10 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
     () => new Set([0, 1].filter((i) => i < (datosIniciales?.secciones?.length ?? 0)))
   );
   const [notificacion, avisar, cerrarNotificacion] = useNotificacion();
+  // Confirmación destructiva en curso: { titulo, descripcion, confirmar, tono, alConfirmar }.
+  const [confirmacion, setConfirmacion] = useState(null);
+  const pedirConfirmar = (config) => setConfirmacion(config);
+  const cerrarConfirmar = () => setConfirmacion(null);
 
   const secciones = programacion?.secciones ?? EMPTY;
 
@@ -54,8 +58,6 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
     });
 
   const eliminarSeccion = (indice) => {
-    const s = secciones[indice];
-    if (!confirm(`¿Eliminar el apartado "${s.codigo || ""} ${s.titulo || ""}"?`)) return;
     setProgramacion((p) => ({
       ...p,
       secciones: (p.secciones || []).filter((_, i) => i !== indice),
@@ -272,6 +274,7 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
                     onCambiar={cambiarSeccion}
                     onCambiarBloque={cambiarBloque}
                     onEliminar={eliminarSeccion}
+                    pedirConfirmar={pedirConfirmar}
                   />
                 </li>
               ))}
@@ -374,13 +377,49 @@ export default function ProgramacionEditor({ datosIniciales, idExistente = null 
       </aside>
 
       <Notificacion notificacion={notificacion} onCerrar={cerrarNotificacion} />
+
+      <Confirmar
+        abierto={!!confirmacion}
+        titulo={confirmacion?.titulo}
+        descripcion={confirmacion?.descripcion}
+        textoConfirmar={confirmacion?.confirmar || "Eliminar"}
+        tono={confirmacion?.tono || "peligro"}
+        onCancelar={cerrarConfirmar}
+        onConfirmar={() => {
+          confirmacion?.alConfirmar?.();
+          cerrarConfirmar();
+        }}
+      />
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ Apartado */
 
-function Apartado({ seccion, indice, abierto, onToggle, onCambiar, onCambiarBloque, onEliminar }) {
+function Apartado({ seccion, indice, abierto, onToggle, onCambiar, onCambiarBloque, onEliminar, pedirConfirmar }) {
+  const tituloCorto = `${seccion.codigo || ""} ${seccion.titulo || ""}`.trim() || "este apartado";
+  const pedirEliminarSeccion = () =>
+    pedirConfirmar({
+      titulo: `¿Eliminar ${tituloCorto === "este apartado" ? "este apartado" : `"${tituloCorto}"`}?`,
+      descripcion: "Se eliminará el apartado con todos sus bloques. Esta acción no se puede deshacer.",
+      confirmar: "Eliminar",
+      alConfirmar: () => onEliminar(indice),
+    });
+  const pedirRestaurar = () =>
+    pedirConfirmar({
+      titulo: "¿Restaurar el texto original?",
+      descripcion: "Se sustituirán los bloques de este apartado por su texto original.",
+      confirmar: "Restaurar",
+      tono: "info",
+      alConfirmar: () => onCambiar(indice, "bloques", [{ tipo: "texto", texto: seccion.textoOriginal }]),
+    });
+  const pedirEliminarBloque = (i) =>
+    pedirConfirmar({
+      titulo: "¿Eliminar este bloque?",
+      descripcion: "Se eliminará el bloque del apartado. Esta acción no se puede deshacer.",
+      confirmar: "Eliminar",
+      alConfirmar: () => onCambiar(indice, "bloques", seccion.bloques.filter((_, n) => n !== i)),
+    });
   return (
     <Tarjeta className="overflow-hidden">
       {/* Cabecera */}
@@ -416,7 +455,7 @@ function Apartado({ seccion, indice, abierto, onToggle, onCambiar, onCambiarBloq
         </Etiqueta>
 
         <button
-          onClick={() => onEliminar(indice)}
+          onClick={pedirEliminarSeccion}
           aria-label="Eliminar apartado"
           title="Eliminar apartado"
           className="shrink-0 w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
@@ -431,9 +470,7 @@ function Apartado({ seccion, indice, abierto, onToggle, onCambiar, onCambiarBloq
           {seccion.textoOriginal && <details className="mb-4 rounded-xl border border-slate-200 bg-white p-3 text-sm">
             <summary className="cursor-pointer font-medium text-slate-600">Comparar con el texto original</summary>
             <pre className="whitespace-pre-wrap font-sans text-xs max-h-64 overflow-auto mt-3 text-slate-600">{seccion.textoOriginal}</pre>
-            <button className="text-xs text-brand-700 underline mt-3" onClick={() => {
-              if (confirm('¿Sustituir los bloques de este apartado por su texto original?')) onCambiar(indice, 'bloques', [{ tipo: 'texto', texto: seccion.textoOriginal }]);
-            }}>Restaurar texto original</button>
+            <button className="text-xs text-brand-700 underline mt-3" onClick={pedirRestaurar}>Restaurar texto original</button>
           </details>}
           <ul className="space-y-3">
             {(seccion.bloques || []).map((bloque, i) => (
@@ -441,7 +478,8 @@ function Apartado({ seccion, indice, abierto, onToggle, onCambiar, onCambiarBloq
                 <EditorBloque
                   bloque={bloque}
                   onCambiar={(campo, valor) => onCambiarBloque(indice, i, campo, valor)}
-                  onEliminar={() => onCambiar(indice, "bloques", seccion.bloques.filter((_, n) => n !== i))}
+                  onEliminar={() => pedirEliminarBloque(i)}
+                  pedirConfirmar={pedirConfirmar}
                 />
               </li>
             ))}
@@ -483,7 +521,7 @@ const ETIQUETA_TIPO = {
   tabla: { texto: "Tabla", icono: "panel", tono: "verde" },
 };
 
-function EditorBloque({ bloque, onCambiar, onEliminar }) {
+function EditorBloque({ bloque, onCambiar, onEliminar, pedirConfirmar }) {
   const meta = ETIQUETA_TIPO[bloque.tipo] || ETIQUETA_TIPO.texto;
 
   return (
@@ -493,7 +531,7 @@ function EditorBloque({ bloque, onCambiar, onEliminar }) {
           <Icono nombre={meta.icono} className="w-3 h-3" />
           {meta.texto}
         </Etiqueta>
-        <button onClick={() => { if (confirm('¿Eliminar este bloque?')) onEliminar(); }} aria-label="Eliminar bloque" className="p-1 text-slate-400 hover:text-red-600"><Icono nombre="basura" className="w-4 h-4" /></button>
+        <button onClick={onEliminar} aria-label="Eliminar bloque" className="p-1 text-slate-400 hover:text-red-600"><Icono nombre="basura" className="w-4 h-4" /></button>
       </div>
 
       <div className="p-3.5">
@@ -545,14 +583,14 @@ function EditorBloque({ bloque, onCambiar, onEliminar }) {
           </ul>
         )}
 
-        {bloque.tipo === "tabla" && <EditorTabla bloque={bloque} onCambiar={onCambiar} />}
+        {bloque.tipo === "tabla" && <EditorTabla bloque={bloque} onCambiar={onCambiar} pedirConfirmar={pedirConfirmar} />}
       </div>
     </div>
   );
 }
 
-function EditorTabla({ bloque, onCambiar }) {
-  if(bloque.diseno?.origen==='pdf') return <EditorTablaOriginal bloque={bloque} onCambiar={onCambiar} />;
+function EditorTabla({ bloque, onCambiar, pedirConfirmar }) {
+  if(bloque.diseno?.origen==='pdf') return <EditorTablaOriginal bloque={bloque} onCambiar={onCambiar} pedirConfirmar={pedirConfirmar} />;
   const columnas = bloque.columnas || [];
 
   const actualizarColumna = (i, valor) => {
@@ -584,7 +622,12 @@ function EditorTabla({ bloque, onCambiar }) {
                   className="w-full px-2.5 py-2 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700 focus:bg-white focus:border-brand-400 transition-colors"
                 />
                 <button type="button" disabled={columnas.length <= 1} aria-label={`Eliminar columna ${c + 1}`} className="text-xs text-slate-400 hover:text-red-600 disabled:opacity-30 mt-1"
-                  onClick={() => { if (confirm(`¿Eliminar la columna ${c + 1} y sus celdas?`)) onCambiar("__tabla", { columnas: columnas.filter((_, n) => n !== c), filas: (bloque.filas || []).map((f) => f.filter((_, n) => n !== c)) }); }}>Eliminar columna</button>
+                  onClick={() => pedirConfirmar({
+                    titulo: `¿Eliminar la columna ${c + 1} y sus celdas?`,
+                    descripcion: "Se eliminará la columna con todo su contenido. Esta acción no se puede deshacer.",
+                    confirmar: "Eliminar",
+                    alConfirmar: () => onCambiar("__tabla", { columnas: columnas.filter((_, n) => n !== c), filas: (bloque.filas || []).map((f) => f.filter((_, n) => n !== c)) }),
+                  })}>Eliminar columna</button>
               </th>
             ))}
             <th className="w-8" />
@@ -636,7 +679,7 @@ function EditorTabla({ bloque, onCambiar }) {
   );
 }
 
-function EditorTablaOriginal({bloque,onCambiar}) {
+function EditorTablaOriginal({bloque,onCambiar,pedirConfirmar}) {
   const {celdas,cubiertas,estilos}=mapaCeldas(bloque);
   return <div className="overflow-x-auto">
     <p className="text-xs text-brand-700 mb-3">Tabla original · página {bloque.diseno.pagina} · Puedes editar el contenido de cada celda.</p>
@@ -652,7 +695,13 @@ function EditorTablaOriginal({bloque,onCambiar}) {
         </td>;
       })}</tr>)}</tbody>
     </table>
-    <button className="text-xs text-slate-500 underline mt-3" onClick={()=>{if(confirm('¿Convertir a tabla simple? Se conserva el texto, pero se eliminan las combinaciones de celdas y los estilos originales.'))onCambiar('__tabla',{diseno:undefined});}}>Editar filas y columnas como tabla simple</button>
+    <button className="text-xs text-slate-500 underline mt-3" onClick={() => pedirConfirmar({
+      titulo: '¿Convertir a tabla simple?',
+      descripcion: 'Se conserva el texto, pero se eliminan las combinaciones de celdas y los estilos originales.',
+      confirmar: 'Convertir',
+      tono: 'info',
+      alConfirmar: () => onCambiar('__tabla', { diseno: undefined }),
+    })}>Editar filas y columnas como tabla simple</button>
   </div>;
 }
 

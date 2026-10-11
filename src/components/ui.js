@@ -63,6 +63,7 @@ const VARIANTES = {
   secundario: "bg-white text-slate-800 border border-slate-200 shadow-sm hover:bg-slate-50 hover:border-slate-300",
   fantasma: "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
   peligro: "bg-white text-red-600 border border-red-200 hover:bg-red-50 hover:border-red-300",
+  peligroSolido: "bg-red-600 text-white border border-transparent shadow-lg shadow-red-600/20 hover:bg-red-700",
   exito: "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-700",
 };
 
@@ -148,22 +149,133 @@ export function Etiqueta({ tono = "neutro", className, children, ...props }) {
 /* ------------------------------------------------------------------ Aviso */
 
 const AVISOS = {
-  info: { caja: "bg-brand-50 border-brand-200 text-brand-900", icono: "info", color: "text-brand-600" },
-  exito: { caja: "bg-emerald-50 border-emerald-200 text-emerald-900", icono: "checkCirculo", color: "text-emerald-600" },
-  aviso: { caja: "bg-amber-50 border-amber-200 text-amber-900", icono: "aviso", color: "text-amber-600" },
-  error: { caja: "bg-red-50 border-red-200 text-red-900", icono: "aviso", color: "text-red-600" },
+  info: { caja: "bg-brand-50/70 border-brand-200 text-brand-950", pastilla: "bg-brand-100 text-brand-700", icono: "info" },
+  exito: { caja: "bg-emerald-50/80 border-emerald-200 text-emerald-950", pastilla: "bg-emerald-100 text-emerald-700", icono: "checkCirculo" },
+  aviso: { caja: "bg-amber-50 border-amber-200/90 text-amber-950", pastilla: "bg-amber-100 text-amber-700", icono: "aviso" },
+  error: { caja: "bg-red-50 border-red-200 text-red-950", pastilla: "bg-red-100 text-red-600", icono: "cruz" },
 };
 
-export function Aviso({ tipo = "info", titulo, children, accion, className }) {
+export function Aviso({ tipo = "info", titulo, children, accion, onCerrar, className }) {
   const conf = AVISOS[tipo] || AVISOS.info;
 
   return (
-    <div className={cx("flex gap-3 p-4 rounded-xl border", conf.caja, className)} role={tipo === "error" ? "alert" : "status"}>
-      <Icono nombre={conf.icono} className={cx("w-5 h-5 shrink-0 mt-0.5", conf.color)} />
+    <div
+      className={cx("flex items-start gap-3.5 p-4 sm:p-5 rounded-2xl border shadow-sm", conf.caja, className)}
+      role={tipo === "error" ? "alert" : "status"}
+    >
+      <span className={cx("grid place-items-center w-9 h-9 rounded-xl shrink-0", conf.pastilla)} aria-hidden="true">
+        <Icono nombre={conf.icono} className="w-5 h-5" />
+      </span>
       <div className="flex-1 min-w-0 text-sm">
-        {titulo && <p className="font-semibold mb-0.5">{titulo}</p>}
-        {children && <div className="leading-relaxed [&_p+p]:mt-1.5">{children}</div>}
+        {titulo && <p className="font-bold tracking-tight mb-1">{titulo}</p>}
+        {children && <div className="leading-relaxed text-[13px] opacity-90 [&_p+p]:mt-1.5">{children}</div>}
         {accion && <div className="mt-3">{accion}</div>}
+      </div>
+      {onCerrar && (
+        <button
+          onClick={onCerrar}
+          aria-label="Cerrar aviso"
+          className="grid place-items-center w-7 h-7 -mr-1 -mt-1 rounded-lg shrink-0 opacity-60 hover:opacity-100 hover:bg-black/5 transition-all"
+        >
+          <Icono nombre="cruz" className="w-4 h-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------- Diálogo de confirmación */
+
+const TONOS_CONFIRMAR = {
+  peligro: { pastilla: "bg-red-100 text-red-600", icono: "aviso", boton: "peligroSolido" },
+  info: { pastilla: "bg-brand-100 text-brand-700", icono: "info", boton: "primario" },
+};
+
+/**
+ * Sustituto del `confirm()` nativo: modal centrado con la identidad de la app.
+ * Controlado por el padre con `abierto`; `ocupado` desactiva los botones
+ * mientras se ejecuta la acción (p. ej. un borrado en el servidor).
+ */
+export function Confirmar({
+  abierto,
+  titulo,
+  descripcion,
+  textoConfirmar = "Confirmar",
+  textoCancelar = "Cancelar",
+  tono = "peligro",
+  ocupado = false,
+  onConfirmar,
+  onCancelar,
+}) {
+  const conf = TONOS_CONFIRMAR[tono] || TONOS_CONFIRMAR.peligro;
+  const botonRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!abierto) return;
+    botonRef.current?.focus();
+    const alPulsar = (e) => {
+      if (e.key === "Escape") onCancelar?.();
+    };
+    document.addEventListener("keydown", alPulsar);
+    const anterior = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", alPulsar);
+      document.body.style.overflow = anterior;
+    };
+  }, [abierto, onCancelar]);
+
+  if (!abierto) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center p-4 bg-slate-950/50 backdrop-blur-[2px] animate-fade-in"
+      onClick={() => { if (!ocupado) onCancelar?.(); }}
+      role="presentation"
+    >
+      <div
+        className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 animate-pop"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirmar-titulo"
+        aria-describedby={descripcion ? "confirmar-descripcion" : undefined}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3.5">
+          <span className={cx("grid place-items-center w-10 h-10 rounded-xl shrink-0", conf.pastilla)} aria-hidden="true">
+            <Icono nombre={conf.icono} className="w-5 h-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 id="confirmar-titulo" className="font-bold text-slate-900 tracking-tight leading-snug">
+              {titulo}
+            </h2>
+            {descripcion && (
+              <p id="confirmar-descripcion" className="text-sm text-slate-600 leading-relaxed mt-1">
+                {descripcion}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-2 mt-6">
+          <Boton
+            variante="secundario"
+            className="flex-1"
+            onClick={onCancelar}
+            disabled={ocupado}
+          >
+            {textoCancelar}
+          </Boton>
+          <Boton
+            ref={botonRef}
+            variante={conf.boton}
+            className="flex-1"
+            onClick={onConfirmar}
+            cargando={ocupado}
+          >
+            {textoConfirmar}
+          </Boton>
+        </div>
       </div>
     </div>
   );

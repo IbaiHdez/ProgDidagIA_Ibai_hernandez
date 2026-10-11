@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { programacionDAO } from '@/dao/programacionDAO';
 import { validarProgramacion } from '@/lib/validacion';
+import { resumenizar } from '@/lib/estado';
 export async function GET() {
-  try { return NextResponse.json(await programacionDAO.findAll()); }
+  try { return NextResponse.json((await programacionDAO.findAll()).map(resumenizar)); }
   catch (error) { console.error(error); return NextResponse.json({ error: 'No se pudo conectar con la base de datos.' }, { status: 503 }); }
 }
 export async function POST(request) {

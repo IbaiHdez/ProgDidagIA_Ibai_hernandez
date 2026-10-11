@@ -1,5 +1,8 @@
-import { connectToDatabase } from '@/lib/mongodb';
-import Programacion from '@/models/Programacion';
+import { connectToDatabase } from '../lib/mongodb.js';
+import Programacion from '../models/Programacion.js';
+
+// Campos del resumen del panel: sin textos ni bloques, solo contadores.
+export const RESUMEN_PROJECTION = { modulo: 1, secciones: 1, exportadaEn: 1, createdAt: 1, updatedAt: 1 };
 
 class ProgramacionDAO {
   async create(data) {
@@ -11,7 +14,7 @@ class ProgramacionDAO {
 
   async findAll() {
     await connectToDatabase();
-    const docs = await Programacion.find({}).sort({ updatedAt: -1 }).lean();
+    const docs = await Programacion.find({}, RESUMEN_PROJECTION).sort({ updatedAt: -1 }).lean();
     return docs;
   }
 
@@ -36,6 +39,13 @@ class ProgramacionDAO {
     await connectToDatabase();
     const doc = await Programacion.findByIdAndDelete(id).lean();
     return doc;
+  }
+
+  // Registra una exportación sin tocar updatedAt: así el panel puede saber
+  // si el contenido ha cambiado después de exportar.
+  async marcarExportada(id) {
+    await connectToDatabase();
+    await Programacion.updateOne({ _id: id }, { $set: { exportadaEn: new Date() } }, { timestamps: false });
   }
 }
 

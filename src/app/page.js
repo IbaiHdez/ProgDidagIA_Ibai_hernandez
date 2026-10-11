@@ -140,7 +140,7 @@ export default function Home() {
               tamano="lg"
               variante="secundario"
               iconoDerecha="flecha"
-              className="!bg-white !text-brand-700 !border-transparent hover:!bg-brand-50"
+              className="bg-white! text-brand-700! border-transparent! hover:bg-brand-50!"
             >
               Subir mi programación
             </Boton>

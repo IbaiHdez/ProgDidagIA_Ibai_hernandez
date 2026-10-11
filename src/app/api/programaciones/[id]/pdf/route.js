@@ -12,6 +12,8 @@ export async function GET(request, { params }) {
     const data = await programacionDAO.findById(id);
     if (!data) return NextResponse.json({ error: 'Programación no encontrada.' }, { status: 404 });
     const buffer = await renderPdf(generateHTMLTemplate(data));
+    // La marca de exportación no debe impedir la descarga si falla.
+    try { await programacionDAO.marcarExportada(id); } catch (e) { console.error('No se pudo registrar la exportación:', e); }
     return new NextResponse(buffer, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${nombreDescarga(data.modulo, 'pdf')}"`, 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Error exportando pdf:', error);
