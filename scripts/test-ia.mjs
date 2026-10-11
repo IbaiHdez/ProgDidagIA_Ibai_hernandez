@@ -232,7 +232,7 @@ test('un array que no encaja falla con un mensaje claro', async () => {
   cascadaCompleta();
   mockFetch(geminiSimulado(() => JSON.stringify(['texto suelto', 42])));
 
-  await assert.rejects(() => analizarDocumento('texto'), /no se puede convertir/);
+  await assert.rejects(() => analizarDocumento('texto'), /estructura válida/);
 });
 
 test('reintenta ante 503 y lo consigue', async () => {
@@ -617,6 +617,19 @@ test('cuota agotada no se presenta como modelo inexistente', () => {
   assert.equal(e.code,'QUOTA_EXCEEDED');
   assert.equal(e.retryable,false);
   assert.equal(isModelUnavailableError(e),false);
+});
+
+test('una cuota agotada no se reintenta por cada fragmento y se comunica sin datos privados',async()=>{
+  soloProveedor('groq');resetCircuitos();
+  const llamadas=mockFetch(()=>errorGroq(429,'insufficient_quota gsk_no_debe_aparecer contenido privado'));
+  const {data,meta}=await analizarDocumentoFragmentado(documentoLargo());
+  assert.equal(llamadas.length,2,'un intento por modelo para todo el documento');
+  assert.equal(meta.estadoIA,'no_disponible');
+  assert.equal(meta.avisos.length,1);
+  assert.match(meta.avisos[0],/Cuota.*agotada/);
+  assert.doesNotMatch(JSON.stringify(meta),/gsk_|contenido privado/);
+  assert.equal(data.secciones.length,40);
+  assert.ok(meta.fallosIA.length>1);
 });
 
 test('un fragmento fallido no tira el trabajo: se avisa y se continúa', async () => {

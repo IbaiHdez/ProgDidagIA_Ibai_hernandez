@@ -64,7 +64,7 @@ export async function analizarConGemini({ config, text, moduleCode, model, signa
       const finishReason = response?.candidates?.[0]?.finishReason;
       throw new ProviderError(
         `Gemini no devolvió contenido${finishReason ? ` (finishReason: ${finishReason})` : ''}.`,
-        { provider: 'gemini', model: modelo, status: 502, retryable: false }
+        { provider: 'gemini', model: modelo, status: 502, retryable: false, code: /SAFETY|PROHIBITED|BLOCK/i.test(finishReason || response?.promptFeedback?.blockReason || '') ? 'SAFETY' : 'BAD_RESPONSE' }
       );
     }
 

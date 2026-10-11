@@ -131,7 +131,7 @@ test('fallo total de IA mantiene TODOS los apartados, incluido contenido inicial
     assert.deepEqual(data.secciones.map((s)=>s.codigo), source.map((s)=>s.codigo));
     assert.equal(data.modulo.nombre,'Ciclo');
     source.forEach((s,i) => assert.equal(data.secciones[i].textoOriginal,s.texto.trim()));
-    source.forEach((s,i) => assert.equal(data.secciones[i].bloques.map((b)=>b.texto).join('\n'),s.texto.trim()));
+    source.forEach((s,i) => assert.equal(data.secciones[i].bloques.map((b)=>b.texto).join(' ').replace(/\s+/g,' '),s.texto.trim().replace(/\s+/g,' ')));
     assert.ok(meta.avisos.length);
   } finally {
     if(keys[0]) process.env.GEMINI_API_KEY=keys[0]; if(keys[1]) process.env.GROQ_API_KEY=keys[1];
@@ -143,7 +143,7 @@ test('presupuesto de IA agotado conserva todos los apartados en vez de descartar
   assert.equal(meta.presupuestoAgotado,true);
   assert.equal(meta.avisos.length,1);
   assert.deepEqual(data.secciones.map((s)=>s.codigo),crearSeccionesFuente(muestra).map((s)=>s.codigo));
-  assert.ok(data.secciones.filter((s)=>s.textoOriginal).every((s)=>s.bloques[0].texto===s.textoOriginal));
+  assert.ok(data.secciones.filter((s)=>s.textoOriginal).every((s)=>s.bloques.map(b=>b.texto).join(' ').replace(/\s+/g,' ')===s.textoOriginal.replace(/\s+/g,' ')));
   const abort=new AbortController();abort.abort();
   await assert.rejects(analizarDocumentoFragmentado(muestra,{signal:abort.signal,presupuestoMs:0}),{name:'AbortError'});
 });

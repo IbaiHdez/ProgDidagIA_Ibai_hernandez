@@ -1,6 +1,7 @@
 import { PDFParse, LineStore, Line, Point } from 'pdf-parse';
 import { OPS, Util } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { normalizarTexto } from './estructura.js';
+import { reconstruirCuadricula } from './pdfGrid.js';
 
 const identidad = () => [1, 0, 0, 1, 0, 0];
 const transformar = ([x,y], m) => [m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]];
@@ -43,8 +44,10 @@ export async function geometriaTablas(page) {
       const relleno=[OPS.fill,OPS.eoFill,OPS.fillStroke,OPS.eoFillStroke].includes(modo);
       if (relleno) {
         const w=b[2]-b[0], h=b[3]-b[1];
-        if (w>5 && h<=2) linea(b[0],(b[1]+b[3])/2,b[2],(b[1]+b[3])/2);
-        else if (h>5 && w<=2) linea((b[0]+b[2])/2,b[1],(b[0]+b[2])/2,b[3]);
+        // Algunos generadores separan las esquinas en segmentos de 2-3 puntos.
+        // Descartarlos deja abiertos los bordes de toda la tabla.
+        if (w>2 && h<=2 && w>h*3) linea(b[0],(b[1]+b[3])/2,b[2],(b[1]+b[3])/2);
+        else if (h>2 && w<=2 && h>w*3) linea((b[0]+b[2])/2,b[1],(b[0]+b[2])/2,b[3]);
         else if (w>5 && h>5) {
           const p=punto(b[0],b[1]),q=punto(b[2],b[3]);
           fondos.push({minXY:{x:Math.min(p[0],q[0]),y:Math.min(p[1],q[1])},maxXY:{x:Math.max(p[0],q[0]),y:Math.max(p[1],q[1])},color});
@@ -66,7 +69,14 @@ export async function geometriaTablas(page) {
     }
   }
   store.normalize();
-  return { tablas:store.getTableData().filter((t)=>t.check() && t.cellCount>=2 && t.rowCount<=1000), fondos };
+  const bordesVerticales=[...store.vLines];
+  const tablas=store.getTables().map((t)=>{
+    const original=t.toData();
+    const abiertos=t.hLines.some(l=>l.from.x<(original?.minXY.x??Infinity)-2 || l.to.x>(original?.maxXY.x??-Infinity)+2);
+    if(!original?.check()||abiertos) return reconstruirCuadricula(t,bordesVerticales) || (original?.check()?original:null);
+    return original;
+  }).filter(t=>t && t.cellCount>=2 && t.rowCount<=1000);
+  return { tablas, fondos };
 }
 
 function construirTabla(t, items, fondos, pagina) {
@@ -115,14 +125,26 @@ export async function extraerPdfConTablas(buffer) {
   const parser=new PDFParse({data:buffer});
   try {
     const doc=await parser.load();
-    const paginas=[], tablas={}, avisos=[];
+    const paginas=[], tablas={}, avisos=[], folios=[], posicionesFolios=[];
     for(let numero=1;numero<=doc.numPages;numero++) {
       const page=await doc.getPage(numero), vp=page.getViewport({scale:1});
       const contenido=await page.getTextContent();
+      // Los nombres genéricos de styles (sans-serif) no distinguen Arial de
+      // Arial-Bold. PDF.js resuelve los nombres reales al cargar los operadores.
+      const nombresFuentes=new Map();
+      try {
+        await page.getOperatorList();
+        for(const nombre of new Set(contenido.items.map(it=>it.fontName).filter(Boolean))) {
+          if(page.commonObjs.has(nombre)) nombresFuentes.set(nombre,page.commonObjs.get(nombre)?.name);
+        }
+      } catch { /* La falta de metadatos de fuente no impide recuperar el texto. */ }
       const items=contenido.items.filter((it)=>typeof it.str==='string').map((it,i)=>{
         const [x,y]=transformar([it.transform[4],it.transform[5]],vp.transform);
-        return {...it,i,x:x+Math.min(it.width/2,1),y:y-Math.min(it.height/2,2),bold:/bold|black|demi/i.test(contenido.styles[it.fontName]?.fontFamily||it.fontName)};
+        return {...it,i,x:x+Math.min(it.width/2,1),y:y-Math.min(it.height/2,2),bold:/bold|black|demi/i.test(nombresFuentes.get(it.fontName)||contenido.styles[it.fontName]?.fontFamily||it.fontName)};
       });
+      const folio=items.find(it=>/^\d{1,5}$/.test(it.str.trim()) && (it.y>vp.height*0.9 || it.y<vp.height*0.08) &&
+        !items.some(otro=>otro.i!==it.i && otro.str.trim() && Math.abs(otro.y-it.y)<3));
+      folios.push(folio?.str.trim());
       let detectadas=[];
       try { const geo=await geometriaTablas(page); detectadas=geo.tablas.map((t)=>construirTabla(t,items,geo.fondos,numero)).filter(Boolean); }
       catch { avisos.push(`Página ${numero}: no se pudo comprobar la geometría de las tablas; se conserva su texto.`); }
@@ -133,17 +155,37 @@ export async function extraerPdfConTablas(buffer) {
         for(const i of t.usados) propietarios.set(i,id);
         primeras.set(Math.min(...t.usados),id);
       });
-      let texto='';
+      const distancias=new Map(); let ultimaLinea;
+      for(const it of items.filter(it=>it.str.trim()&&!propietarios.has(it.i))) {
+        if(ultimaLinea && it.y-ultimaLinea.y>it.height*0.7 && it.y-ultimaLinea.y<it.height*3 && Math.abs(it.height-ultimaLinea.height)<1) {
+          const fuente=Math.round(it.height), salto=Math.round((it.y-ultimaLinea.y)*2)/2;
+          const valores=distancias.get(fuente)||new Map();valores.set(salto,(valores.get(salto)||0)+1);distancias.set(fuente,valores);
+        }
+        ultimaLinea=it;
+      }
+      const interlineados=new Map([...distancias].map(([fuente,valores])=>[fuente,[...valores].sort((a,b)=>b[1]-a[1]||a[0]-b[0])[0][0]]));
+      let texto='', previo, posicionFolio;
       for(const it of items) {
         if(primeras.has(it.i)) texto+=`\n\n[[TABLA_PDF:${primeras.get(it.i)}]]\n\n`;
-        if(!propietarios.has(it.i)) texto+=it.str+(it.hasEOL?'\n':'');
+        if(!propietarios.has(it.i)) {
+          const separacion=Math.max(Math.max(it.height,previo?.height||0)*1.65,(interlineados.get(Math.round(it.height))||0)*1.2);
+          if(previo && it.str.trim() && it.y-previo.y>separacion && texto.endsWith('\n')) texto+='\n';
+          if(it.i===folio?.i) posicionFolio={inicio:texto.length,fin:texto.length+it.str.length};
+          texto+=it.str+(it.hasEOL?'\n':'');
+        }
+        if(it.str.trim()) previo=it;
       }
       paginas.push(texto);
+      posicionesFolios.push(posicionFolio);
       page.cleanup();
     }
     const iniciales=paginas.map((p)=>p.trim().match(/^(\d{1,5})\s*\n/)?.[1]);
     const consecutivos=iniciales.slice(1).filter((n,i)=>n&&iniciales[i]&&Number(n)===Number(iniciales[i])+1).length;
     const paginacion=paginas.length>1&&consecutivos>=(paginas.length-1)*0.7;
-    return {texto:normalizarTexto(paginas.map((p)=>paginacion?p.replace(/^\s*\d{1,5}\s*\n/,''):p).join('\n\n')),tablas,avisos,formato:'pdf'};
+    const correlativos=folios.filter((n,i)=>n&&((i>0&&folios[i-1]&&+n===+folios[i-1]+1)||(folios[i+1]&&+folios[i+1]===+n+1))).length;
+    return {texto:normalizarTexto(paginas.map((p,i)=>{
+      if(correlativos>=3&&posicionesFolios[i]) return p.slice(0,posicionesFolios[i].inicio)+p.slice(posicionesFolios[i].fin);
+      return paginacion?p.replace(/^\s*\d{1,5}\s*\n/,''):p;
+    }).join('\n\n')),tablas,avisos,formato:'pdf',paginas:doc.numPages};
   } finally {await parser.destroy();}
 }

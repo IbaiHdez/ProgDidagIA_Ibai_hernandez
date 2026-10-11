@@ -11,6 +11,7 @@ export default function Asistente() {
   const [archivo, setArchivo] = useState(null);
   const [texto, setTexto] = useState('');
   const [tablas, setTablas] = useState({});
+  const [paginas, setPaginas] = useState(null);
   const [avisosExtraccion, setAvisosExtraccion] = useState([]);
   const [usarIA, setUsarIA] = useState(false);
   const [fase, setFase] = useState('subir');
@@ -50,7 +51,7 @@ export default function Asistente() {
       const res = await fetch('/api/extract', { method: 'POST', body: form, signal: abort.signal });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setTexto(data.text); setTablas(data.tablas || {}); setAvisosExtraccion(data.avisos || []); setSeleccion(''); setBusqueda(''); setFase('elegir');
+      setTexto(data.text); setPaginas(data.paginas); setTablas(data.tablas || {}); setAvisosExtraccion(data.avisos || []); setSeleccion(''); setBusqueda(''); setFase('elegir');
     } catch (e) { if (!abort.signal.aborted) { setError(e.message); setFase('subir'); } }
   };
   const analizar = async () => {
@@ -92,8 +93,8 @@ export default function Asistente() {
           <p className="text-sm text-slate-500 mt-1">{resultado.secciones.length} apartados · {meta?.tablasOriginales || 0} tablas conservadas del PDF</p></div>
         <Boton variante="secundario" icono="subir" onClick={reiniciar}>Otro documento</Boton>
       </div>
-      {meta?.avisos?.length > 0 && <Aviso tipo="aviso" titulo="Se ha conservado texto original para evitar pérdidas" className="mb-6">
-        <p>Algunas partes necesitan revisión manual. Los apartados afectados están marcados en el editor.</p>
+      {meta?.avisos?.length > 0 && <Aviso tipo="aviso" titulo={meta.estadoIA==='no_disponible'?'Documento importado; la IA no pudo completarse':'Documento importado con partes pendientes de revisión'} className="mb-6">
+        <p>Se conserva todo el contenido de la selección, incluidas las tablas. Puedes editar y exportar el documento. Los apartados sin validar por IA están marcados para revisión.</p>
         <details className="mt-2"><summary className="cursor-pointer font-semibold">Ver {meta.avisos.length} avisos</summary>
           <ul className="list-disc pl-5 mt-2 space-y-1">{meta.avisos.map((a, i) => <li key={i}>{a}</li>)}</ul></details>
       </Aviso>}
@@ -155,7 +156,7 @@ export default function Asistente() {
         <div className="space-y-4 lg:sticky lg:top-24">
           <Tarjeta className="p-5"><h2 className="font-semibold mb-3">Contenido seleccionado</h2>
             <p className="text-sm font-medium text-brand-700">{elegido ? `${elegido.codigo} ${elegido.titulo}` : 'Documento completo'}</p>
-            <p className="text-xs text-slate-500 my-3">{longitudContenido(preview).toLocaleString('es-ES')} caracteres · Se respetarán los títulos y la numeración del original.</p>
+            <p className="text-xs text-slate-500 my-3">{paginas ? `${paginas} páginas en el archivo original · ` : ''}{longitudContenido(preview).toLocaleString('es-ES')} caracteres en la selección · Se respetarán los títulos y la numeración del original.</p>
             <p className="text-sm text-brand-700 mb-3">{Object.keys(tablas).filter((id)=>preview.includes(`[[TABLA_PDF:${id}]]`)).length} tablas originales detectadas en la selección.</p>
             <label className="flex gap-2 text-sm mb-4"><input type="checkbox" checked={usarIA} onChange={(e)=>setUsarIA(e.target.checked)} />Organizar también el texto con IA (opcional). Las tablas originales se conservan.</label>
             <Boton className="w-full" onClick={analizar} disabled={!texto.trim()} icono="sparkles">{usarIA?'Procesar con IA':'Abrir conservando las tablas'}</Boton>

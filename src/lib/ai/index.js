@@ -1,5 +1,5 @@
 import { getActiveProviders } from './config';
-import { ProviderError, AiUnavailableError, toProviderError } from './errors';
+import { ProviderError, AiUnavailableError, toProviderError, resumirFalloIA } from './errors';
 import { conCircuito, estadoCircuito } from './circuitBreaker';
 import { extraerJson, sanearRespuesta } from './sanitize';
 import { crearPlanFragmentos, coberturaContenido, formatearParte } from './fragmentar';
@@ -77,7 +77,7 @@ export function construirCandidatos() {
  * @param {{ moduleCode?: string, signal?: AbortSignal }} options
  * @returns {Promise<{ data: object, meta: object }>}
  */
-export async function analizarDocumento(text, { moduleCode = null, signal } = {}) {
+export async function analizarDocumento(text, { moduleCode = null, signal, descartados = new Map() } = {}) {
   if (!text || !text.trim()) {
     throw new Error('El texto a analizar está vacío.');
   }
@@ -98,6 +98,8 @@ export async function analizarDocumento(text, { moduleCode = null, signal } = {}
   for (const candidato of candidatos) {
     signal?.throwIfAborted();
     const { id, config, model } = candidato;
+    const descarte=descartados.get(`${id}/${model}`);
+    if(descarte) { diagnostico.push(descarte); continue; }
     const circuito = estadoCircuito(id);
 
     if (circuito.abierto) {
@@ -134,7 +136,9 @@ export async function analizarDocumento(text, { moduleCode = null, signal } = {}
           );
         }
 
-        const data = sanearRespuesta(payload);
+        let data;
+        try { data = sanearRespuesta(payload); }
+        catch { throw new ProviderError('La respuesta no contiene una estructura válida.',{provider:id,model,code:'BAD_RESPONSE',retryable:false}); }
         delete data._avisos; // es interno del saneado
 
         return {
@@ -159,14 +163,17 @@ export async function analizarDocumento(text, { moduleCode = null, signal } = {}
         }`;
 
         if (!providerError.retryable) {
-          diagnostico.push({
+          const fallo={
             proveedor: id,
             modelo: model,
             intento: intento,
             estado: 'fallo-definitivo',
+            codigo: providerError.code, estadoHttp: providerError.status,
             detalle: resumen,
             siguiente: siguiente ? `${siguiente.id}/${siguiente.model}` : null,
-          });
+          };
+          diagnostico.push(fallo);
+          if(['AUTH_ERROR','QUOTA_EXCEEDED','MODEL_UNAVAILABLE','MISSING_API_KEY'].includes(providerError.code)||[401,403,404].includes(providerError.status)) descartados.set(`${id}/${model}`,fallo);
           break;
         }
 
@@ -177,6 +184,7 @@ export async function analizarDocumento(text, { moduleCode = null, signal } = {}
             modelo: model,
             intento: intento,
             estado: 'reintentando',
+            codigo: providerError.code, estadoHttp: providerError.status,
             detalle: `${providerError.message.slice(0, 120)} (intento ${intento}/${retries}, reintento en ${espera}ms)`,
             siguiente: `${id}/${model}`,
           });
@@ -189,6 +197,7 @@ export async function analizarDocumento(text, { moduleCode = null, signal } = {}
           modelo: model,
           intento: intento,
           estado: 'agotado',
+          codigo: providerError.code, estadoHttp: providerError.status,
           detalle: resumen,
           siguiente: siguiente ? `${siguiente.id}/${siguiente.model}` : null,
         });
@@ -217,10 +226,11 @@ export async function analizarDocumentoFragmentado(text, { moduleCode, signal, o
   if (!text?.trim()) throw new Error('El texto a analizar está vacío.');
   const { secciones, fragmentos } = crearPlanFragmentos(text,undefined,tablas);
   const total = fragmentos.length, avisos = [], diagnosticos = [], proveedores = new Set();
+  const descartados=new Map(), fallosIA=[], gruposFallos=new Map();
   const salida = new Map(secciones.map((s, i) => [s.id, {
     sourceId: s.id, codigo: s.codigo, titulo: s.titulo, nivel: s.nivel, orden: i + 1, textoOriginal: expandirTablas(s.texto,tablas).trim(), bloques: [],
   }]));
-  let metaPrimera = null, fragmentosOk = 0, partesConservadas = 0, reintentosIntegridad = 0, partesRecuperadas = 0;
+  let metaPrimera = null, fragmentosOk = 0, partesConservadas = 0, reintentosIntegridad = 0, partesRecuperadas = 0, partesIA = 0;
   const finPresupuesto = Date.now() + Math.max(0, Math.min(presupuestoMs, 240_000));
   let presupuestoAgotado = false;
   const signalAcotada = (ms) => signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
@@ -246,7 +256,7 @@ export async function analizarDocumentoFragmentado(text, { moduleCode, signal, o
     try {
       const restante = finPresupuesto - Date.now();
       if (restante <= 0) throw new Error('PRESUPUESTO_AGOTADO');
-      const respuesta = await analizarDocumento(fragmento.texto, { moduleCode, signal: signalAcotada(Math.min(restante, 60_000)) });
+      const respuesta = await analizarDocumento(fragmento.texto, { moduleCode, descartados, signal: signalAcotada(Math.min(restante, 60_000)) });
       data = respuesta.data;
       metaPrimera ||= { ...respuesta.meta, modulo: data.modulo };
       proveedores.add(`${respuesta.meta.proveedor}/${respuesta.meta.modelo}`);
@@ -257,8 +267,10 @@ export async function analizarDocumentoFragmentado(text, { moduleCode, signal, o
         if (!presupuestoAgotado) avisos.push('Se alcanzó el tiempo máximo de IA. Se conserva el trabajo completado y el texto original de las partes pendientes.');
         presupuestoAgotado = true;
       } else {
-        avisos.push(`Parte ${i + 1}/${total}: no se pudo estructurar con IA. Se ha conservado el texto original.`);
-        console.warn(`[IA] Fragmento ${i + 1}:`, error.message);
+        const motivos=resumirFalloIA(error), clave=motivos.join('; ');
+        const partes=gruposFallos.get(clave)||[]; partes.push(i+1); gruposFallos.set(clave,partes);
+        fallosIA.push({parte:i+1,motivos,apartados:[...new Set(fragmento.partes.map(p=>p.codigo||p.titulo))]});
+        console.warn(`[IA] Fragmento ${i + 1}: ${clave}`);
       }
     }
     const evaluaciones = fragmento.partes.map((parte) => evaluar(data, parte));
@@ -277,7 +289,7 @@ export async function analizarDocumentoFragmentado(text, { moduleCode, signal, o
         }).join('\n');
         const respuesta = await analizarDocumento(
           'REVISIÓN DE TRANSCRIPCIÓN: en una respuesta anterior faltaban o sobraban los siguientes términos (cantidad = ocurrencias). Comprueba en la fuente sus frases completas y conserva TODAS sus apariciones, especialmente los rótulos de tablas.\n' + diferencias + '\nTranscribe literalmente TODO el contenido de estos apartados, conservando tablas, letras de criterios, viñetas, cifras y repeticiones. No resumas ni corrijas. Si una tabla está incompleta, conserva ese tramo como texto.\n\n' + pendientes.map(formatearParte).join('\n'),
-          { moduleCode, signal: revisionSignal });
+          { moduleCode, descartados, signal: revisionSignal });
         reparacion = respuesta.data;
         proveedores.add(`${respuesta.meta.proveedor}/${respuesta.meta.modelo}`);
       } catch {
@@ -294,8 +306,9 @@ export async function analizarDocumentoFragmentado(text, { moduleCode, signal, o
       }
       if (evaluacion.valido) {
         destino.bloques.push(...evaluacion.bloques);
+        partesIA++;
       } else if (parte.texto.trim()) {
-        destino.bloques.push({ tipo: 'texto', texto: parte.texto.trim() });
+        destino.bloques.push(...bloquesTexto(parte.texto));
         destino.revisar = true;
         partesConservadas++;
         if (data) {
@@ -311,6 +324,7 @@ export async function analizarDocumentoFragmentado(text, { moduleCode, signal, o
     onProgress?.({ fragmento: i + 1, completados: i + 1, total, fase: 'analizando' });
   }
   signal?.throwIfAborted();
+  for(const [motivo,partes] of gruposFallos) avisos.push(`${motivo}. ${partes.length} parte(s) conservada(s) del original. El documento completo sigue disponible para editar y exportar.`);
   onProgress?.({ fragmento: total, completados: total, total, fase: 'fusionando' });
   const modulo = moduleCode ? metaPrimera?.modulo || { codigo: moduleCode, nombre: secciones[0]?.titulo || '', curso: '', profesor: '' }
     : { codigo: '', nombre: nombreDocumento?.replace(/\.(pdf|docx)$/i, '') || 'Documento completo', curso: '', profesor: '' };
@@ -320,7 +334,8 @@ export async function analizarDocumentoFragmentado(text, { moduleCode, signal, o
   void _modulo;
   return { data, meta: {
     ...meta, proveedor: meta.proveedor || 'extracción directa', modelo: meta.modelo || 'Estructura del documento',
-    tablasOriginales: fragmentos.filter((f)=>f.sinIA).length,
+    tablasOriginales: fragmentos.flatMap((f)=>f.partes).filter((p)=>p.bloqueOriginal?.tipo==='tabla').length,
+    estadoIA:!usarIA?'sin_solicitar':partesConservadas?(partesIA?'parcial':'no_disponible'):'completa', partesIA, fallosIA,
     fragmentos: total, fragmentosOk, partesConservadas, presupuestoAgotado, reintentosIntegridad, partesRecuperadas, diagnosticos, proveedores: [...proveedores], avisos,
   } };
 }

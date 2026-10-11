@@ -17,10 +17,10 @@ export async function POST(request) {
     if (pdf ? !buffer.subarray(0, 1024).includes(Buffer.from('%PDF-')) : buffer.subarray(0, 2).toString() !== 'PK') {
       return NextResponse.json({ error: 'El contenido no corresponde al formato del archivo.' }, { status: 415 });
     }
-    const { texto, formato, tablas = {}, avisos = [] } = pdf ? await extraerPdfConTablas(buffer) : await extraerTexto(buffer, file.name);
+    const { texto, formato, tablas = {}, avisos = [], paginas = null } = pdf ? await extraerPdfConTablas(buffer) : await extraerTexto(buffer, file.name);
     if(!texto.trim()) throw new Error('Documento sin texto extraíble.');
     const apartados = detectarApartados(texto);
-    return NextResponse.json({ text: texto, formato, tablas, avisos, caracteres: texto.length, apartados, modulos: apartados });
+    return NextResponse.json({ text: texto, formato, tablas, avisos, paginas, caracteres: texto.length, apartados, modulos: apartados });
   } catch (error) {
     console.error('Error de extracción:', error);
     return NextResponse.json({ error: 'No se pudo leer el documento. Comprueba que contiene texto y que no está protegido ni dañado.' }, { status: 422 });

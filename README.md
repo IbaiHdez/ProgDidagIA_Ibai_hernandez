@@ -42,6 +42,8 @@ La interfaz usa tipografías del sistema: compilar no necesita descargar Google 
 
 La detección es heurística. Documentos con diseños inusuales, columnas o encabezados ambiguos requieren revisar el listado o corregir el texto extraído. No se promete reconstrucción visual idéntica del PDF original.
 
+Los índices con puntos guía y entradas partidas se conservan como **Índice original**, sin enviarlos a la IA ni convertir sus referencias en apartados disponibles. Las listas numeradas y cifras como «35.000 habitantes» se mantienen dentro de su sección. Un subtítulo sin número conserva la jerarquía del apartado al que pertenece. La selección indica cuántas páginas contiene realmente el archivo: un índice puede mencionar capítulos que no estén incluidos en el PDF subido.
+
 `src/lib/ai/fragmentar.js` crea un plan por secciones. Los apartados pequeños viajan juntos; los grandes se dividen en partes acotadas que conservan su identidad. No hay solapamiento ni deduplicación que descarte continuaciones. Prioriza los límites de unidades o fichas numeradas (sin códigos o nombres específicos del documento) y los párrafos antes de cortar una tabla por tamaño. Incluso los párrafos sin saltos tienen un límite de tamaño. Las pruebas reconstruyen el texto de todas las partes para comprobar que no se pierde contenido.
 
 La IA recibe identificadores de apartado y debe devolver bloques asociados a ellos. El servidor conserva los títulos y el orden de origen. Compara los términos y cifras del texto fuente normalizando diferencias de formato (palabras partidas, viñetas extraídas, cabeceras repetidas o generadas). No acepta resúmenes, omisiones del cuerpo ni cifras alteradas. Si detecta diferencias, hace una segunda pasada acotada sobre las partes afectadas, indicando los términos pendientes; si no consigue verificarlas, conserva el original y explica el motivo. Cada solicitud tiene un límite y el análisis dispone de un presupuesto total de cuatro minutos: si lo agota, devuelve los apartados completados y conserva como texto los pendientes. La cancelación explícita del usuario sí detiene el trabajo. Esta comprobación no equivale a una validación semántica: no demuestra que cada dato se haya colocado en la celda correcta. Cada apartado conserva además su texto original en MongoDB: puedes compararlo o restaurarlo desde el editor. Un resultado sin IA sigue siendo editable, pero puede necesitar reconstrucción manual de tablas.
@@ -76,6 +78,8 @@ Gemini y Groq se prueban en cascada según la configuración. Los modelos indica
 | `AI_CHUNK_CHARS` | `14000` | Presupuesto por fragmento; mínimo 512 |
 
 Las respuestas se validan y normalizan. Groq puede degradar de `json_schema` a `json_object` y después a instrucciones de formato. El circuito de cada proveedor se enfría tras fallos transitorios reiterados. Los errores definitivos pasan al siguiente candidato.
+
+Los modelos con credenciales inválidas, sin acceso o cuota agotada se descartan durante ese análisis para evitar repetir peticiones inútiles por cada fragmento. Los avisos agrupan causas y número de partes afectadas; los diagnósticos públicos no incluyen mensajes crudos de proveedores, claves ni contenido del documento. `meta.estadoIA` diferencia extracción directa, IA completa, parcial y no disponible. Si falla la IA, se conservan párrafos legibles, listas y tablas originales; no se pierde el documento ni se presenta la importación local como una transformación completa por IA.
 
 ## Arquitectura
 
@@ -117,6 +121,8 @@ npm run build
 Los tests de proveedores usan respuestas simuladas y no consumen cuota ni requieren claves reales. Cubren cascada, formatos de respuesta, normalización, conservación de fragmentos, selección completa/parcial, errores del sondeo, validación y escape HTML.
 
 Si está presente `PD_DAW_25-26_DWES.pdf`, se ejecutan también las regresiones del caso real: 23 títulos, 20 encabezados al seleccionar DWES, conservación de numeración irregular y reconstrucción completa de los fragmentos. Se comprueban además 51 tablas originales, 25 en el apartado de situaciones de aprendizaje, y la igualdad de todos los términos y cifras respecto a la extracción de texto. Si falta el archivo, se omiten estas pruebas del caso real; se mantienen las pruebas sintéticas de geometría, validación y exportación.
+
+Para la segunda regresión real, establece `PDF_REGRESSION_SMR` a la ruta local de `PD_SMR_26-27_INTRO.pdf` y ejecuta `npm test`. Comprueba las 47 páginas, 39 encabezados numerados, 14 bloques de tabla, los grupos de celdas combinadas de las tablas con bordes abiertos y la conservación de palabras y cifras tanto sin IA como con su presupuesto agotado. El archivo no se incorpora al repositorio. La paginación impresa se elimina por su posición en el margen y su secuencia, sin borrar cifras iguales del cuerpo.
 
 ## Límites del despliegue actual
 

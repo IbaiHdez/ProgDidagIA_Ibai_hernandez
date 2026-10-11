@@ -110,7 +110,7 @@ export function toProviderError(error, { provider, model }) {
 
   if (isMissingKeyError(error)) {
     return new ProviderError(`API key de ${provider} ausente o inválida: ${message}`, {
-      provider, model, status: status ?? 401, code, retryable: false, cause: error,
+      provider, model, status: status ?? 401, code: 'AUTH_ERROR', retryable: false, cause: error,
     });
   }
 
@@ -123,7 +123,7 @@ export function toProviderError(error, { provider, model }) {
   // Modelo caído/no disponible: definitivo, se prueba el siguiente de la cascada.
   if (isModelUnavailableError(error)) {
     return new ProviderError(`El modelo "${model}" de ${provider} no está disponible: ${message}`, {
-      provider, model, status, code: code || 'MODEL_UNAVAILABLE', retryable: false, cause: error,
+      provider, model, status, code: 'MODEL_UNAVAILABLE', retryable: false, cause: error,
     });
   }
 
@@ -133,6 +133,27 @@ export function toProviderError(error, { provider, model }) {
     PATRONES_TRANSIENTOS.some((p) => lower.includes(p));
 
   return new ProviderError(message, { provider, model, status, code, retryable, cause: error });
+}
+
+/** Mensajes seguros: no exponen la respuesta del proveedor, claves ni documentos. */
+export function resumirFalloIA(error) {
+  const intentos=error?.attempts?.length ? error.attempts : [{codigo:error?.code,estadoHttp:error?.status}];
+  const causas=intentos.map((a)=>{
+    const codigo=a.codigo, status=a.estadoHttp;
+    if(codigo==='AUTH_ERROR'||codigo==='MISSING_API_KEY'||status===401||status===403) return 'Credenciales ausentes, inválidas o sin permiso';
+    if(codigo==='QUOTA_EXCEEDED') return 'Cuota del proveedor agotada';
+    if(codigo==='MODEL_UNAVAILABLE'||status===404) return 'Modelo no disponible para esta cuenta';
+    if(codigo==='SAFETY') return 'El proveedor ha rechazado procesar este contenido';
+    if(codigo==='TRUNCATED') return 'Respuesta cortada por el límite de salida';
+    if(codigo==='BAD_JSON'||codigo==='BAD_RESPONSE') return 'Respuesta con un formato inválido';
+    if(codigo==='CIRCUIT_OPEN'||a.estado==='circuito-abierto'||status===429) return 'Límite de peticiones o proveedor temporalmente saturado';
+    if(status>=500 || ['ECONNRESET','ECONNREFUSED','ETIMEDOUT'].includes(codigo)) return 'Fallo de conexión o del servicio de IA';
+    if(status===400||status===422) return 'El proveedor ha rechazado la petición';
+    if(error?.name==='TimeoutError'||error?.name==='AbortError') return 'La petición ha superado su tiempo de espera';
+    if(error?.isUnavailable && !error.attempts?.length) return 'No hay claves de IA configuradas';
+    return 'No se ha obtenido una respuesta válida de IA';
+  });
+  return [...new Set(causas)];
 }
 
 function extractStatus(error) {

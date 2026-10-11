@@ -52,6 +52,11 @@ export function crearPlanFragmentos(texto, maxChars = limiteConfigurado(), tabla
     partes = []; longitud = 0;
   };
   for (const s of secciones) {
+    if (s.sinIA) {
+      cerrar();
+      fragmentos.push({sinIA:true,texto:'',partes:[{sourceId:s.id,bloqueOriginal:{tipo:'texto',texto:s.texto}}]});
+      continue;
+    }
     const presupuesto = Math.max(128, maxChars - s.titulo.length - s.codigo.length - 150);
     const trozos = separarTablas(s.texto,tablas).flatMap((p)=>p.bloqueOriginal?[p]:dividirTexto(p.texto,presupuesto,true).map((texto)=>({texto})));
     if (!trozos.length) trozos.push({texto:''});

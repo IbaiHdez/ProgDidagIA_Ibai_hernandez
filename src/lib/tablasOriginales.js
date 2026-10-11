@@ -14,7 +14,7 @@ export const expandirTablas = (texto, tablas) => separarTablas(texto,tablas).map
 
 /** Mejora la lectura del texto ajeno a tablas sin reescribirlo. */
 export function bloquesTexto(texto) {
-  return texto.split(/\n\s*\n|\n(?=\s*[•●▪])/).map((p)=>p.trim()).filter(Boolean)
+  return texto.split(/\n\s*\n|\n(?=\s*(?:[•●▪]|\d{1,3}[.)]\s|[a-z][)]\s))/).map((p)=>p.trim()).filter(Boolean)
     .map((p)=>({tipo:'texto',texto:p.replace(/\s*\n\s*/g,' ')}));
 }
 
